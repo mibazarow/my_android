@@ -334,6 +334,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.shutdown()
         return .terminateNow
     }
+
+    /// Клик по иконке в Dock: у приложения нет своего окна, поэтому
+    /// открываем файлы телефона — иначе клик выглядит как «ничего не произошло».
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if controller.readyDevice != nil {
+            DeviceFilesWindowController.present(serial: controller.readyDevice?.serial)
+        } else {
+            NoDeviceWindowController.present()
+        }
+        return true
+    }
 }
 
 // MARK: - NSMenuDelegate
