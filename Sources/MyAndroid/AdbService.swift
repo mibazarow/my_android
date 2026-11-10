@@ -132,4 +132,19 @@ enum AdbService {
     static func wake(serial: String?) {
         runAsync(["shell", "input", "keyevent", "224"], serial: serial)
     }
+
+    /// Останавливает adb-демон. Вызывается при выходе, чтобы не оставлять
+    /// висящий процесс в системе. При следующем запуске поднимется сам.
+    static func killServer() {
+        guard let adb = ToolLocator.adb else { return }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: adb)
+        process.arguments = ["kill-server"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+
+        try? process.run()
+        process.waitUntilExit()
+    }
 }
