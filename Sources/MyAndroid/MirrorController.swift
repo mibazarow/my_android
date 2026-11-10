@@ -51,6 +51,12 @@ final class MirrorController: ObservableObject {
 
     private init() {
         self.settings = MirrorSettings.load()
+
+        // Прибираем процессы scrcpy, оставшиеся от прошлого запуска.
+        // Если приложение в прошлый раз упало или его убили, scrcpy
+        // продолжает висеть сиротой и держит окно с телефоном.
+        MirrorController.killOrphanedMirrors()
+
         startPolling()
     }
 
@@ -212,22 +218,76 @@ final class MirrorController: ObservableObject {
 
     // MARK: - Остановка
 
-    /// Синхронная остановка для выхода из приложения.
+    /// Останавливает scrcpy. Вызывается при выходе из приложения.
+    ///
+    /// Гарантированно добивает процесс: сначала вежливый SIGTERM, затем
+    /// SIGKILL. Без этого при аварийном выходе scrcpy остаётся сиротой
+    /// и продолжает висеть в системе.
     func shutdown() {
         pollTimer?.invalidate()
         pollTimer = nil
         restarting = true
 
-        guard let process else { return }
-        process.terminate()
+        terminateMirror()
 
-        let deadline = Date().addingTimeInterval(2.0)
-        while process.isRunning && Date() < deadline {
-            usleep(50_000)
-        }
+        // На всякий случай добиваем всё, что могло остаться от этого бандла:
+        // scrcpy мог успеть породить потомков или пережить предыдущий запуск.
+        MirrorController.killOrphanedMirrors()
+    }
+
+    /// Убивает текущий процесс scrcpy, если он есть.
+    private func terminateMirror() {
+        guard let process else { return }
+
         if process.isRunning {
-            kill(process.processIdentifier, SIGKILL)
+            process.terminate()
+
+            // Ждём до 2 секунд на штатное завершение.
+            let deadline = Date().addingTimeInterval(2.0)
+            while process.isRunning && Date() < deadline {
+                usleep(50_000)
+            }
+
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
         }
+
         self.process = nil
+    }
+
+    /// Убивает процессы scrcpy, оставшиеся от прошлых запусков приложения.
+    ///
+    /// Такие сироты появляются, если приложение упало или было принудительно
+    /// закрыто: родитель умирает, а scrcpy продолжает держать окно и adb.
+    /// Ищем только процессы из нашего бандла, чтобы не тронуть чужие.
+    static func killOrphanedMirrors() {
+        guard let scrcpy = ToolLocator.scrcpy else { return }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-f", scrcpy]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            return
+        }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        guard let output = String(data: data, encoding: .utf8) else { return }
+
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let pid = pid_t(trimmed), pid != myPID, pid > 0 else { continue }
+            kill(pid, SIGKILL)
+        }
     }
 }

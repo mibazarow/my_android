@@ -23,8 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusMenu: NSMenu?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Без иконки в Dock: приложение целиком в меню-баре.
-        NSApp.setActivationPolicy(.accessory)
+        // Иконка в Dock: приложение должно быть видно пользователю под своим
+        // именем и со своей иконкой. Само зеркало (scrcpy) запускается со
+        // скрытой иконкой, поэтому в Dock остаётся ровно один значок — наш.
+        NSApp.setActivationPolicy(.regular)
 
         setupStatusItem()
         observeState()
@@ -324,6 +326,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         controller.shutdown()
+    }
+
+    /// Приложение обязано завершиться, даже если система просит подождать.
+    /// Без этого при выходе через Dock остаётся висеть scrcpy.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        controller.shutdown()
+        return .terminateNow
     }
 }
 

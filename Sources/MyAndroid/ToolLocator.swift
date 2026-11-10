@@ -90,6 +90,12 @@ enum ToolLocator {
             env["SCRCPY_SERVER_PATH"] = server
         }
 
+        // scrcpy построен на SDL, а SDL регистрирует процесс в системе как
+        // полноценное GUI-приложение: он попадает в Dock со своей иконкой.
+        // Нам нужна только иконка My Android, поэтому просим SDL не считать
+        // процесс активным приложением.
+        env["SDL_MAC_BACKGROUND_APP"] = "1"
+
         return env
     }
 
