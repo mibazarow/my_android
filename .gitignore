@@ -1,0 +1,13 @@
+# Артефакты сборки
+build/
+
+# Служебное macOS
+.DS_Store
+
+# Swift Package Manager
+*.swiftpm
+.swiftpm/
+
+# Временное
+*.log
+*.tmp
