@@ -11,3 +11,10 @@ build/
 # Временное
 *.log
 *.tmp
+# Артефакты сборки движка
+vendor/scrcpy/builddir/
+vendor/scrcpy/server/build/
+vendor/scrcpy/local.properties
+vendor/scrcpy/.gradle/
+vendor/scrcpy/build/
+build/mirror/

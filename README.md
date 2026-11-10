@@ -12,7 +12,7 @@
 [![macOS](https://img.shields.io/badge/macOS-13%2B-black?style=flat-square&logo=apple&logoColor=white)](#требования)
 [![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange?style=flat-square&logo=swift&logoColor=white)](#сборка-из-исходников)
 [![Android](https://img.shields.io/badge/Android-5.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](#требования)
-[![Лицензия](https://img.shields.io/badge/лицензия-source--available-blue?style=flat-square)](#лицензия)
+[![Лицензия](https://img.shields.io/badge/лицензия-GPL--3.0-blue?style=flat-square)](LICENSE)
 [![Сайт](https://img.shields.io/badge/сайт-bazarow.ru-informational?style=flat-square&logo=safari&logoColor=white)](https://bazarow.ru)
 
 </div>
@@ -234,17 +234,39 @@ cd my_android
 ./build.sh --run
 ```
 
-**Для сборки** нужны:
+### Что нужно для сборки
 
-- Xcode Command Line Tools (`xcode-select --install`)
-- Homebrew — из него берутся бинарники scrcpy и adb, которые потом
-  упаковываются внутрь бандла
-- `brew install scrcpy`
-- `brew install --cask android-platform-tools`
+Приложение — Swift, но движок зеркалирования собирается из исходников,
+поэтому нужен инструментарий:
 
-**Для запуска** готового `.app` не нужно ничего.
+```bash
+xcode-select --install
+brew install meson ninja openjdk@21
+brew install --cask android-platform-tools
+```
 
-Весь проект написан на Swift. Никакого Python, ни в сборке, ни в работе.
+Нужен также [Android SDK](https://developer.android.com/studio) — из него
+берётся `build-tools` для сборки сервера под телефон.
+
+### Как это работает
+
+`build.sh` делает три вещи:
+
+1. Компилирует приложение на Swift — `Sources/MyAndroid/`.
+2. Собирает движок из исходников в `vendor/scrcpy/` через
+   `Tools/build-mirror.sh` — отдельно клиент под Mac и сервер под Android.
+3. Упаковывает результат вместе со всеми библиотеками внутрь `.app`.
+
+Пересобрать только движок:
+
+```bash
+./Tools/build-mirror.sh --clean
+```
+
+**Для запуска** готового `.app` не нужно ничего — ни Homebrew, ни SDK.
+
+Весь остальной проект написан на Swift. Никакого Python, ни в сборке,
+ни в работе.
 
 ---
 
@@ -269,7 +291,15 @@ Resources/
 
 Tools/
   IconGen.swift                  рисует иконку кодом
-  Vendor.swift                   упаковывает scrcpy, adb и библиотеки в бандл
+  Vendor.swift                   упаковывает движок, adb и библиотеки в бандл
+  build-mirror.sh                собирает движок из vendor/scrcpy
+
+vendor/
+  scrcpy/                        исходники движка (форк, Apache 2.0)
+  scrcpy-LICENSE                 лицензия движка отдельным файлом
+
+licenses/                        полные тексты всех лицензий
+NOTICE.md                        кто чей код, ссылки на оригиналы
 ```
 
 ---
@@ -321,15 +351,34 @@ Tools/
 
 ## Лицензия
 
-**Source-available.** Исходный код открыт — читай, изучай, разбирайся, как
-устроено. Официальные сборки бесплатны для любого использования, включая
-коммерческое.
+**GNU General Public License v3.0.** Бери, меняй, распространяй — открыто
+и с сохранением тех же прав для следующих.
 
-Ограничения: **модификация и перепродажа требуют письменного разрешения автора.**
+GPL выбрана не из идеологии, а по необходимости: внутри сборки работает
+FFmpeg с GPL-компонентами (x264, x265), и это единственный вариант, при
+котором права всех авторов соблюдены.
 
 При использовании и распространении обязательно указывать авторство:
 
 > My Android by Михаил Базаров — [bazarow.ru](https://bazarow.ru)
+
+## Чужие права и что мы взяли
+
+Приложение стоит на плечах других проектов. Все авторы перечислены, все
+лицензии сохранены в каталоге [`licenses/`](licenses/), все ссылки на
+оригиналы — в [`NOTICE.md`](NOTICE.md).
+
+Коротко:
+
+- **Движок зеркалирования** — форк [scrcpy](https://github.com/Genymobile/scrcpy)
+  от Genymobile, Apache 2.0. Исходники зафиксированы в `vendor/scrcpy/`
+  на версии 4.1, собираем свой бинарник сами.
+- **ADB** — официальный инструмент Android, Apache 2.0.
+- **Библиотеки** — FFmpeg (GPL), SDL3 (Zlib), libvpx, dav1d, opus, SVT-AV1
+  (BSD), mpg123, LAME, libusb (LGPL), OpenSSL (Apache 2.0), XZ (0BSD).
+
+Что именно наше, а что чужое — расписано в [`NOTICE.md`](NOTICE.md)
+по разделам.
 
 ---
 

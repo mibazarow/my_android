@@ -52,12 +52,22 @@ cp "$BUILD_DIR/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 cp Resources/Android_Mirror_Start.sh "$CONTENTS/Resources/Android_Mirror_Start.sh"
 chmod +x "$CONTENTS/Resources/Android_Mirror_Start.sh"
 
-# 4) Самодостаточность: scrcpy, adb и все их библиотеки внутрь бандла.
+# 4) Своя сборка зеркалирующего движка из исходников vendor/scrcpy.
+#    Не зависим от версии, которую ставит Homebrew: коммит зафиксирован,
+#    бинарник собирается из кода в репозитории.
+if [ ! -f build/mirror/scrcpy ] || [ ! -f build/mirror/scrcpy-server ]; then
+    echo "→ собираю свой движок из vendor/scrcpy"
+    ./Tools/build-mirror.sh
+else
+    echo "→ движок уже собран (пересобрать: ./Tools/build-mirror.sh --clean)"
+fi
+
+# 5) Самодостаточность: движок, adb и все их библиотеки внутрь бандла.
 #    Без этого приложение работает только на машине с Homebrew.
-echo "→ упаковываю scrcpy и adb внутрь бандла"
+echo "→ упаковываю движок и adb внутрь бандла"
 swift Tools/Vendor.swift "$APP_DIR"
 
-# 5) Подпись (ad-hoc достаточно для локального запуска)
+# 6) Подпись (ad-hoc достаточно для локального запуска)
 echo "→ подписываю"
 codesign --force --deep --sign - "$APP_DIR" 2>&1 | tail -2
 

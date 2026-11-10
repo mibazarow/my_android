@@ -135,20 +135,42 @@ guard fileManager.fileExists(atPath: appPath) else {
 
 // MARK: - Поиск исходников
 
-guard let scrcpyBinary = Homebrew.resolve("scrcpy") else {
-    fail("scrcpy не найден. Установи: brew install scrcpy")
+// Клиент и сервер берём из собственной сборки (Tools/build-mirror.sh).
+// Так приложение не зависит от того, какая версия scrcpy стоит в Homebrew:
+// исходники зафиксированы в vendor/scrcpy, бинарник собирается из них.
+let projectRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()   // Tools
+    .deletingLastPathComponent()   // корень проекта
+    .path
+let mirrorBuild = "\(projectRoot)/build/mirror"
+
+let ownScrcpy = "\(mirrorBuild)/scrcpy"
+let ownServer = "\(mirrorBuild)/scrcpy-server"
+
+guard fileManager.isExecutableFile(atPath: ownScrcpy) else {
+    fail("""
+    нет своей сборки: \(ownScrcpy)
+    Сначала собери её: ./Tools/build-mirror.sh
+    """)
 }
+guard fileManager.fileExists(atPath: ownServer) else {
+    fail("""
+    нет своего сервера: \(ownServer)
+    Сначала собери его: ./Tools/build-mirror.sh
+    """)
+}
+
 guard let adbBinary = Homebrew.resolve("adb") else {
     fail("adb не найден. Установи: brew install --cask android-platform-tools")
 }
-guard let serverPath = Homebrew.scrcpyServer(for: scrcpyBinary) else {
-    fail("scrcpy-server не найден рядом с \(scrcpyBinary)")
-}
+
+let scrcpyBinary = ownScrcpy
+let serverPath = ownServer
 
 print("→ источники:")
-print("   scrcpy: \(scrcpyBinary)")
-print("   adb:    \(adbBinary)")
-print("   server: \(serverPath)")
+print("   scrcpy: \(scrcpyBinary) (своя сборка)")
+print("   adb:    \(adbBinary) (Homebrew)")
+print("   server: \(serverPath) (своя сборка)")
 
 // MARK: - Подготовка каталогов
 
