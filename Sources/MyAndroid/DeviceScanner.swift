@@ -6,27 +6,10 @@ struct AndroidDevice: Identifiable, Hashable {
     let state: String
     let model: String?
     let product: String?
-    let transportID: String?
 
     var id: String { serial }
 
-    /// Отображаемое имя: модель + серийник, чтобы различать одинаковые телефоны.
-    var displayName: String {
-        let name = model ?? product ?? "Android"
-        return "\(name) (\(serial))"
-    }
-
     var isReady: Bool { state == "device" }
-
-    var stateTitle: String {
-        switch state {
-        case "device": return "готов"
-        case "unauthorized": return "не авторизован — подтверди отладку на телефоне"
-        case "offline": return "офлайн"
-        case "no permissions": return "нет прав доступа"
-        default: return state
-        }
-    }
 }
 
 /// Опрашивает adb на список устройств.
@@ -61,7 +44,7 @@ enum DeviceScanner {
     ///
     /// Формат строки:
     /// `3B664A01CVY00000  device usb:17956864X product:CPH2795 model:CPH2795 device:OP6135L1 transport_id:1`
-    static func parse(_ output: String) -> [AndroidDevice] {
+    private static func parse(_ output: String) -> [AndroidDevice] {
         var devices: [AndroidDevice] = []
 
         for line in output.split(separator: "\n") {
@@ -81,7 +64,6 @@ enum DeviceScanner {
 
             var model: String?
             var product: String?
-            var transportID: String?
 
             for field in parts.dropFirst(2) {
                 let text = String(field)
@@ -89,8 +71,6 @@ enum DeviceScanner {
                     model = value
                 } else if let value = value(after: "product:", in: text) {
                     product = value
-                } else if let value = value(after: "transport_id:", in: text) {
-                    transportID = value
                 }
             }
 
@@ -98,8 +78,7 @@ enum DeviceScanner {
                 serial: serial,
                 state: state,
                 model: model,
-                product: product,
-                transportID: transportID
+                product: product
             ))
         }
 

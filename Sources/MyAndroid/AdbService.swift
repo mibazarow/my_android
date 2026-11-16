@@ -38,12 +38,9 @@ enum AdbService {
     }
 
     /// Выполняет команду в фоне, не блокируя интерфейс.
-    static func runAsync(_ args: [String], serial: String?, completion: (() -> Void)? = nil) {
+    static func runAsync(_ args: [String], serial: String?) {
         DispatchQueue.global(qos: .userInitiated).async {
             run(args, serial: serial)
-            if let completion {
-                DispatchQueue.main.async(execute: completion)
-            }
         }
     }
 
@@ -53,13 +50,9 @@ enum AdbService {
         case home = 3
         case back = 4
         case recents = 187
-        case power = 26
         case volumeUp = 24
         case volumeDown = 25
-        case mediaPlayPause = 85
         case wakeup = 224
-        case sleep = 223
-        case enter = 66
     }
 
     /// Нажатие аппаратной кнопки на телефоне.
@@ -72,7 +65,6 @@ enum AdbService {
     struct Battery {
         let level: Int
         let charging: Bool
-        let temperature: Double
     }
 
     /// Читает состояние батареи. nil, если телефон недоступен.
@@ -98,23 +90,19 @@ enum AdbService {
         let acPowered = output.contains("AC powered: true")
         let charging = status == 2 || status == 5 || usbPowered || acPowered
 
-        // Температура в десятых долях градуса.
-        let temp = Double(intValue("temperature") ?? 0) / 10.0
-
-        return Battery(level: level, charging: charging, temperature: temp)
+        return Battery(level: level, charging: charging)
     }
 
     // MARK: - Информация об устройстве
 
     struct DeviceInfo {
-        let model: String
         let androidVersion: String
         let sdk: String
     }
 
     static func deviceInfo(serial: String?) -> DeviceInfo? {
         let output = run(
-            ["shell", "getprop ro.product.model; getprop ro.build.version.release; getprop ro.build.version.sdk"],
+            ["shell", "getprop ro.build.version.release; getprop ro.build.version.sdk"],
             serial: serial
         )
         let lines = output
@@ -122,17 +110,16 @@ enum AdbService {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
 
-        guard lines.count >= 2 else { return nil }
+        guard let androidVersion = lines.first else { return nil }
         return DeviceInfo(
-            model: lines[0],
-            androidVersion: lines.count > 1 ? lines[1] : "?",
-            sdk: lines.count > 2 ? lines[2] : "?"
+            androidVersion: androidVersion,
+            sdk: lines.count > 1 ? lines[1] : "?"
         )
     }
 
     /// Включает экран телефона, если он погас.
     static func wake(serial: String?) {
-        runAsync(["shell", "input", "keyevent", "224"], serial: serial)
+        runAsync(["shell", "input", "keyevent", String(Key.wakeup.rawValue)], serial: serial)
     }
 
     /// Останавливает adb-демон. Вызывается при выходе, чтобы не оставлять

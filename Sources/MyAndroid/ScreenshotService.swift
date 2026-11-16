@@ -10,7 +10,6 @@ enum ScreenshotService {
 
     enum ScreenshotError: LocalizedError {
         case noADB
-        case noDevice
         case failed(String)
         case emptyImage
 
@@ -18,8 +17,6 @@ enum ScreenshotService {
             switch self {
             case .noADB:
                 return "adb не найден"
-            case .noDevice:
-                return "Телефон не подключён"
             case .failed(let message):
                 return "adb вернул ошибку: \(message)"
             case .emptyImage:

@@ -7,15 +7,6 @@ enum MirrorState: Equatable {
     case waitingForDevice
     case running
     case failed(String)
-
-    var title: String {
-        switch self {
-        case .idle: return "Остановлено"
-        case .waitingForDevice: return "Жду телефон…"
-        case .running: return "Зеркалирование активно"
-        case .failed(let message): return message
-        }
-    }
 }
 
 /// Держит процесс scrcpy и данные о телефоне.

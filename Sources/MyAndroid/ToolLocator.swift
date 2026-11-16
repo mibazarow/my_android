@@ -58,15 +58,9 @@ enum ToolLocator {
     static var scrcpy: String? { locate("scrcpy") }
     static var adb: String? { locate("adb") }
 
-    /// Работаем ли на встроенных бинарниках (а не на Homebrew).
-    static var isSelfContained: Bool {
-        guard let scrcpy, let bundledBinDir else { return false }
-        return scrcpy.hasPrefix(bundledBinDir)
-    }
-
     /// Каталог с бинарниками для подмешивания в PATH дочернего процесса.
     /// scrcpy вызывает adb по имени, поэтому adb должен быть виден в PATH.
-    static func pathPrefix() -> String {
+    private static func pathPrefix() -> String {
         var dirs: [String] = []
         if let scrcpyPath = scrcpy {
             dirs.append((scrcpyPath as NSString).deletingLastPathComponent)
@@ -106,35 +100,5 @@ enum ToolLocator {
         env["SDL_MAC_BACKGROUND_APP"] = "1"
 
         return env
-    }
-
-    /// Человекочитаемое состояние окружения — для диагностики.
-    static func diagnostics() -> String {
-        var lines: [String] = []
-        lines.append("режим: \(isSelfContained ? "самодостаточный (всё в бандле)" : "внешние утилиты")")
-        lines.append("scrcpy: \(scrcpy ?? "не найден")")
-        lines.append("adb:    \(adb ?? "не найден")")
-        lines.append("server: \(bundledServerPath ?? "не найден")")
-        return lines.joined(separator: "\n")
-    }
-
-    /// Запускает `<tool> --version` и возвращает вывод.
-    static func version(of tool: String) -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tool)
-        process.arguments = ["--version"]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            return String(data: data, encoding: .utf8) ?? ""
-        } catch {
-            return "ошибка: \(error.localizedDescription)"
-        }
     }
 }
