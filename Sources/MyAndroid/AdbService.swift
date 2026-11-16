@@ -10,31 +10,13 @@ enum AdbService {
     static func run(_ args: [String], serial: String? = nil) -> String {
         guard let adb = ToolLocator.adb else { return "" }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: adb)
-
         var fullArgs: [String] = []
         if let serial, !serial.isEmpty {
             fullArgs += ["-s", serial]
         }
         fullArgs += args
-        process.arguments = fullArgs
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        // stderr не нужен для разбора, но если оставить нечитаемую трубу,
-        // шумная команда может заполнить её и заблокироваться навсегда.
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            return ""
-        }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(data: data, encoding: .utf8) ?? ""
+        return Command.run(adb, fullArgs).stdoutText
     }
 
     /// Выполняет команду в фоне, не блокируя интерфейс.
@@ -126,14 +108,6 @@ enum AdbService {
     /// висящий процесс в системе. При следующем запуске поднимется сам.
     static func killServer() {
         guard let adb = ToolLocator.adb else { return }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: adb)
-        process.arguments = ["kill-server"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        try? process.run()
-        process.waitUntilExit()
+        _ = Command.run(adb, ["kill-server"])
     }
 }

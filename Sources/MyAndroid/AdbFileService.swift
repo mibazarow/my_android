@@ -155,24 +155,9 @@ enum AdbFileService {
         let directory = local.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: adb)
-        process.arguments = ["-s", serial, "pull", remote, local.path]
-
-        let stderr = Pipe()
-        process.standardError = stderr
-        // Прогресс adb не нужен, а нечитаемая труба stdout может
-        // заполниться на большом файле и заблокировать передачу.
-        process.standardOutput = FileHandle.nullDevice
-
-        try process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus != 0 {
-            let message = String(data: stderr.fileHandleForReading.readDataToEndOfFile(),
-                                 encoding: .utf8) ?? "код \(process.terminationStatus)"
-            throw FileError.transferFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
+        try checkTransfer(
+            Command.run(adb, ["-s", serial, "pull", remote, local.path])
+        )
     }
 
     /// Загружает файл на телефон.
@@ -180,24 +165,19 @@ enum AdbFileService {
         guard let adb = ToolLocator.adb else { throw FileError.noAdb }
         guard let serial else { throw FileError.noDevice }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: adb)
-        process.arguments = ["-s", serial, "push", local.path, remoteDirectory]
+        try checkTransfer(
+            Command.run(adb, ["-s", serial, "push", local.path, remoteDirectory])
+        )
+    }
 
-        let stderr = Pipe()
-        process.standardError = stderr
-        // Прогресс adb не нужен, а нечитаемая труба stdout может
-        // заполниться на большом файле и заблокировать передачу.
-        process.standardOutput = FileHandle.nullDevice
-
-        try process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus != 0 {
-            let message = String(data: stderr.fileHandleForReading.readDataToEndOfFile(),
-                                 encoding: .utf8) ?? "код \(process.terminationStatus)"
-            throw FileError.transferFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
+    private static func checkTransfer(_ result: CommandResult) throws {
+        if let error = result.launchError {
+            throw error
         }
+        guard result.status != 0 else { return }
+
+        let message = String(data: result.stderr, encoding: .utf8) ?? "код \(result.status)"
+        throw FileError.transferFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// Куда складывать файлы, перетащенные на окно.

@@ -19,25 +19,9 @@ enum DeviceScanner {
     static func scan() -> [AndroidDevice] {
         guard let adb = ToolLocator.adb else { return [] }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: adb)
-        process.arguments = ["devices", "-l"]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return []
-        }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8) else { return [] }
-
-        return parse(output)
+        let result = Command.run(adb, ["devices", "-l"])
+        guard result.launchError == nil else { return [] }
+        return parse(result.stdoutText)
     }
 
     /// Разбирает вывод `adb devices -l`.
@@ -93,12 +77,6 @@ enum DeviceScanner {
     /// Запускает adb start-server, чтобы сервер был готов к подключению.
     static func startADBServer() {
         guard let adb = ToolLocator.adb else { return }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: adb)
-        process.arguments = ["start-server"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
+        _ = Command.run(adb, ["start-server"])
     }
 }

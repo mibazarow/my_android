@@ -319,27 +319,11 @@ final class MirrorController: ObservableObject {
     static func killOrphanedMirrors() {
         guard let scrcpy = ToolLocator.scrcpy else { return }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-f", scrcpy]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            return
-        }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        guard let output = String(data: data, encoding: .utf8) else { return }
+        let result = Command.run("/usr/bin/pgrep", ["-f", scrcpy])
+        guard result.launchError == nil else { return }
 
         let myPID = ProcessInfo.processInfo.processIdentifier
-        for line in output.split(separator: "\n") {
+        for line in result.stdoutText.split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard let pid = pid_t(trimmed), pid != myPID, pid > 0 else { continue }
             kill(pid, SIGKILL)

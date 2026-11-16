@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 
 /// Снимок экрана телефона.
 ///
@@ -33,33 +32,21 @@ enum ScreenshotService {
             throw ScreenshotError.noADB
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: adb)
         var args = ["exec-out", "screencap", "-p"]
         if let serial, !serial.isEmpty {
             args = ["-s", serial] + args
         }
-        process.arguments = args
 
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        do {
-            try process.run()
-        } catch {
+        let result = Command.run(adb, args)
+        if let error = result.launchError {
             throw ScreenshotError.failed(error.localizedDescription)
         }
-
-        let data = stdout.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            let message = String(data: stderr.fileHandleForReading.readDataToEndOfFile(),
-                                 encoding: .utf8) ?? "код \(process.terminationStatus)"
+        guard result.status == 0 else {
+            let message = String(data: result.stderr, encoding: .utf8) ?? "код \(result.status)"
             throw ScreenshotError.failed(message.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+
+        let data = result.stdout
 
         // adb на некоторых системах добавляет CRLF переводы строк, из-за чего
         // PNG получается битым. Проверяем сигнатуру файла.
