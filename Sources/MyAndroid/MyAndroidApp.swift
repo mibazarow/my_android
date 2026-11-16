@@ -110,15 +110,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         // 2. Поверх других окон
-        let onTop = NSMenuItem(
-            title: "Поверх других окон",
+        let onTop = addAction(
+            "Поверх других окон",
             action: #selector(toggleAlwaysOnTop),
-            keyEquivalent: ""
+            enabled: running,
+            to: menu
         )
-        onTop.target = self
         onTop.state = controller.settings.alwaysOnTop ? .on : .off
-        onTop.isEnabled = running
-        menu.addItem(onTop)
 
         menu.addItem(.separator())
 
@@ -127,95 +125,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         navHeader.isEnabled = false
         menu.addItem(navHeader)
 
-        menu.addItem(keyItem("Домой", "house", #selector(pressHome), enabled: connected))
-        menu.addItem(keyItem("Назад", "arrow.uturn.backward", #selector(pressBack), enabled: connected))
-        menu.addItem(keyItem("Недавние", "square.on.square", #selector(pressRecents), enabled: connected))
+        addAction("Домой", symbol: "house", action: #selector(pressHome), enabled: connected, to: menu)
+        addAction("Назад", symbol: "arrow.uturn.backward", action: #selector(pressBack), enabled: connected, to: menu)
+        addAction("Недавние", symbol: "square.on.square", action: #selector(pressRecents), enabled: connected, to: menu)
 
         menu.addItem(.separator())
 
-        menu.addItem(keyItem("Громче", "speaker.plus", #selector(volumeUp), enabled: connected))
-        menu.addItem(keyItem("Тише", "speaker.minus", #selector(volumeDown), enabled: connected))
-        menu.addItem(keyItem("Разбудить экран", "sun.max", #selector(wakeScreen), enabled: connected))
+        addAction("Громче", symbol: "speaker.plus", action: #selector(volumeUp), enabled: connected, to: menu)
+        addAction("Тише", symbol: "speaker.minus", action: #selector(volumeDown), enabled: connected, to: menu)
+        addAction("Разбудить экран", symbol: "sun.max", action: #selector(wakeScreen), enabled: connected, to: menu)
 
         menu.addItem(.separator())
 
         // 4. Скриншот
-        let shot = NSMenuItem(
-            title: "Скриншот на рабочий стол",
+        addAction(
+            "Скриншот на рабочий стол",
+            symbol: "camera",
+            accessibility: "Скриншот",
+            key: "s",
             action: #selector(takeScreenshot),
-            keyEquivalent: "s"
+            enabled: connected,
+            to: menu
         )
-        shot.target = self
-        shot.image = NSImage(systemSymbolName: "camera", accessibilityDescription: "Скриншот")
-        shot.isEnabled = connected
-        menu.addItem(shot)
 
-        // Файлы: просмотр и перетаскивание в обе стороны.
-        let files = NSMenuItem(
-            title: "Файлы телефона…",
+        // Файлы: просмотр и перетаскивание в обе стороны.
+        addAction(
+            "Файлы телефона…",
+            symbol: "folder",
+            accessibility: "Файлы",
+            key: "f",
             action: #selector(showFiles),
-            keyEquivalent: "f"
+            enabled: connected,
+            to: menu
         )
-        files.target = self
-        files.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Файлы")
-        files.isEnabled = connected
-        menu.addItem(files)
 
         // Отправка файлов на телефон без перетаскивания: просто выбрать
         // файл в Finder и нажать «Отправить».
-        let send = NSMenuItem(
-            title: "Отправить файл на телефон…",
+        addAction(
+            "Отправить файл на телефон…",
+            symbol: "arrow.up.doc",
+            accessibility: "Отправить",
+            key: "u",
             action: #selector(sendFileToPhone),
-            keyEquivalent: "u"
+            enabled: connected,
+            to: menu
         )
-        send.target = self
-        send.image = NSImage(systemSymbolName: "arrow.up.doc", accessibilityDescription: "Отправить")
-        send.isEnabled = connected
-        menu.addItem(send)
 
         menu.addItem(.separator())
 
-        let log = NSMenuItem(
-            title: "Журнал зеркала…",
+        addAction(
+            "Журнал зеркала…",
+            symbol: "doc.text.magnifyingglass",
+            accessibility: "Журнал",
             action: #selector(showMirrorLog),
-            keyEquivalent: ""
+            to: menu
         )
-        log.target = self
-        log.image = NSImage(systemSymbolName: "doc.text.magnifyingglass", accessibilityDescription: "Журнал")
-        menu.addItem(log)
 
-        let help = NSMenuItem(
-            title: "Как копировать и перетаскивать…",
+        addAction(
+            "Как копировать и перетаскивать…",
+            symbol: "questionmark.circle",
+            accessibility: "Справка",
             action: #selector(showHelp),
-            keyEquivalent: ""
+            to: menu
         )
-        help.target = self
-        help.image = NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Справка")
-        menu.addItem(help)
 
         menu.addItem(.separator())
 
         // 5. Выход
-        let quitItem = NSMenuItem(
-            title: "Выход",
-            action: #selector(quit),
-            keyEquivalent: "q"
-        )
-        quitItem.target = self
-        menu.addItem(quitItem)
+        addAction("Выход", key: "q", action: #selector(quit), to: menu)
     }
 
-    /// Пункт меню с иконкой и обработчиком.
-    private func keyItem(
+    /// Пункт меню с обработчиком. Иконка и горячая клавиша — по желанию.
+    @discardableResult
+    private func addAction(
         _ title: String,
-        _ symbol: String,
-        _ action: Selector,
-        enabled: Bool
+        symbol: String? = nil,
+        accessibility: String? = nil,
+        key: String = "",
+        action: Selector,
+        enabled: Bool = true,
+        to menu: NSMenu
     ) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
         item.isEnabled = enabled
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        if let symbol {
+            item.image = NSImage(
+                systemSymbolName: symbol,
+                accessibilityDescription: accessibility ?? title
+            )
+        }
+        menu.addItem(item)
         return item
     }
 
@@ -257,14 +257,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         controller.$devices
             .receive(on: RunLoop.main)
-            .sink { [weak self] devices in
+            .sink { [weak self] _ in
                 self?.rebuildMenu()
                 self?.updateStatusIcon()
-
-                // Телефон подключился — подсказка больше не нужна.
-                if devices.contains(where: { $0.isReady }) {
-                    NoDeviceWindowController.dismissIfNeeded()
-                }
             }
             .store(in: &cancellables)
 
@@ -279,16 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button else { return }
 
         let connected = controller.readyDevice != nil
-        let running = controller.state == .running
-
-        let symbol: String
-        if running && connected {
-            symbol = "iphone.gen3"
-        } else if connected {
-            symbol = "iphone.gen3"
-        } else {
-            symbol = "iphone.slash"
-        }
+        let symbol = connected ? "iphone.gen3" : "iphone.slash"
 
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "My Android")
             ?? NSImage(systemSymbolName: "iphone", accessibilityDescription: "My Android")

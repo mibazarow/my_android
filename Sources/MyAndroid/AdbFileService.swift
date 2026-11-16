@@ -14,12 +14,16 @@ enum AdbFileService {
 
         var id: String { path }
 
+        private static let sizeFormatter: ByteCountFormatter = {
+            let formatter = ByteCountFormatter()
+            formatter.countStyle = .file
+            return formatter
+        }()
+
         /// Размер в читаемом виде.
         var sizeText: String {
             if isDirectory { return "—" }
-            let formatter = ByteCountFormatter()
-            formatter.countStyle = .file
-            return formatter.string(fromByteCount: size)
+            return Self.sizeFormatter.string(fromByteCount: size)
         }
 
         /// Иконка для файла.

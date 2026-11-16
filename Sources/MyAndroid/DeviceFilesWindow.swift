@@ -126,7 +126,7 @@ final class DeviceFilesModel: ObservableObject {
 
     func open(_ entry: AdbFileService.Entry) {
         guard entry.isDirectory else { return }
-        path = entry.path.hasSuffix("/") ? entry.path : entry.path + "/"
+        path = directoryPath(entry.path)
         selection.removeAll()
         reload()
     }
@@ -145,8 +145,14 @@ final class DeviceFilesModel: ObservableObject {
     }
 
     func go(to newPath: String) {
-        path = newPath.hasSuffix("/") ? newPath : newPath + "/"
+        path = directoryPath(newPath)
         reload()
+    }
+
+    /// Путь каталога всегда со слэшем на конце: adb без него не раскрывает
+    /// симлинк /sdcard.
+    private func directoryPath(_ path: String) -> String {
+        path.hasSuffix("/") ? path : path + "/"
     }
 
     /// Скачивает выбранные объекты в папку, выбранную пользователем.
@@ -209,7 +215,7 @@ final class DeviceFilesModel: ObservableObject {
     func upload(urls: [URL], serial: String?) {
         guard let serial = serial ?? self.serial, !urls.isEmpty else { return }
 
-        let target = path.hasSuffix("/") ? path : path + "/"
+        let target = directoryPath(path)
         statusText = "Загружаю \(urls.count) объект(ов)…"
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -370,9 +376,14 @@ private struct FileListView: NSViewRepresentable {
         // MARK: Двойной клик и меню
 
         @objc func openRow() {
-            guard let tableView, tableView.clickedRow >= 0,
-                  entries.indices.contains(tableView.clickedRow) else { return }
-            let entry = entries[tableView.clickedRow]
+            guard let tableView, tableView.clickedRow >= 0 else { return }
+            open(row: tableView.clickedRow)
+        }
+
+        /// Папку открываем, файл — выделяем.
+        private func open(row: Int) {
+            guard entries.indices.contains(row) else { return }
+            let entry = entries[row]
             if entry.isDirectory {
                 parent.onOpen(entry)
             } else {
@@ -399,13 +410,8 @@ private struct FileListView: NSViewRepresentable {
         }
 
         @objc private func openSelected() {
-            guard let row = tableView?.clickedRow, entries.indices.contains(row) else { return }
-            let entry = entries[row]
-            if entry.isDirectory {
-                parent.onOpen(entry)
-            } else {
-                parent.selection = [entry.path]
-            }
+            guard let row = tableView?.clickedRow else { return }
+            open(row: row)
         }
 
         @objc private func downloadSelected() {

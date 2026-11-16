@@ -31,8 +31,8 @@ struct MirrorSettings: Codable, Equatable {
             "--max-fps", String(Self.maxFPS),
             "--video-codec", Self.videoCodec,
             "--stay-awake",
-            // Синхронизация буфера обмена включена в scrcpy по умолчанию;
-            // выключается она флагом --no-clipboard-autosync, которого здесь нет.
+            // Синхронизация буфера обмена — встроенное поведение scrcpy:
+            // отдельного флага включения нет, только --no-clipboard-autosync.
             // Заголовок окна — чтобы в списке окон было понятно, что это телефон.
             "--window-title", "My Android",
             // Куда scrcpy кладёт файлы, перетащенные на окно телефона.

@@ -33,12 +33,6 @@ final class NoDeviceWindowController: NSWindowController {
         controller.showAndWatch()
     }
 
-    /// Убирает окно, если телефон подключён.
-    static func dismissIfNeeded() {
-        current?.dismiss()
-        current = nil
-    }
-
     convenience init() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 380, height: 250),
@@ -76,24 +70,21 @@ final class NoDeviceWindowController: NSWindowController {
     }
 
     func dismiss() {
-        cancellable = nil
+        detach()
         close()
+    }
+
+    private func detach() {
+        cancellable = nil
         if NoDeviceWindowController.current === self {
             NoDeviceWindowController.current = nil
         }
-    }
-
-    deinit {
-        cancellable = nil
     }
 }
 
 extension NoDeviceWindowController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
-        cancellable = nil
-        if NoDeviceWindowController.current === self {
-            NoDeviceWindowController.current = nil
-        }
+        detach()
     }
 }
 

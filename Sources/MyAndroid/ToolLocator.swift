@@ -21,6 +21,15 @@ enum ToolLocator {
         return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
+    /// Стандартные каталоги с бинарниками. Один список на поиск и на PATH,
+    /// чтобы они не разъехались.
+    private static let systemBinDirs = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+    ]
+
     /// Каталоги, где ищем бинарники.
     private static var searchPaths: [String] {
         var paths: [String] = []
@@ -29,12 +38,7 @@ enum ToolLocator {
             paths.append(bundledBinDir)
         }
 
-        paths += [
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
-        ]
+        paths += systemBinDirs
 
         if let envPath = ProcessInfo.processInfo.environment["PATH"] {
             paths += envPath.split(separator: ":").map(String.init)
@@ -69,7 +73,8 @@ enum ToolLocator {
             let dir = (adbPath as NSString).deletingLastPathComponent
             if !dirs.contains(dir) { dirs.append(dir) }
         }
-        dirs += ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        dirs += systemBinDirs
+        dirs += ["/usr/sbin", "/sbin"]
         return dirs.joined(separator: ":")
     }
 
