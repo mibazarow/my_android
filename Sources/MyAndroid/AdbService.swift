@@ -6,6 +6,9 @@ enum AdbService {
     // MARK: - Запуск команд
 
     /// Синхронно выполняет `adb <args>` и возвращает stdout.
+    ///
+    /// Для `shell`-команд динамические аргументы нужно экранировать самому:
+    /// adb склеивает их через пробел, и путь с `;` выполнится как команда.
     @discardableResult
     static func run(_ args: [String], serial: String? = nil) -> String {
         guard let adb = ToolLocator.adb else { return "" }
