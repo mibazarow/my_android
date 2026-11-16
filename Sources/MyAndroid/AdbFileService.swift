@@ -92,7 +92,12 @@ enum AdbFileService {
         // Слэш в конце обязателен: /sdcard — симлинк, и без него `ls -la`
         // показывает саму ссылку вместо содержимого каталога.
         let listingPath = path.hasSuffix("/") ? path : path + "/"
-        let output = AdbService.run(["shell", "ls", "-la", listingPath], serial: serial)
+        // adb склеивает аргументы shell-команды через пробел, поэтому путь
+        // без кавычек ломается на пробелах и позволяет подставить `;`.
+        let output = AdbService.run(
+            ["shell", "ls", "-la", shellQuoted(listingPath)],
+            serial: serial
+        )
 
         if output.isEmpty {
             throw FileError.listFailed("пустой ответ adb")
@@ -146,6 +151,12 @@ enum AdbFileService {
             }
             return left.name.localizedStandardCompare(right.name) == .orderedAscending
         }
+    }
+
+    /// Одинарные кавычки для удалённого shell; внутренняя кавычка
+    /// экранируется как '\''.
+    private static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     // MARK: - Передача файлов
