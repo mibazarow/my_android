@@ -79,14 +79,23 @@ final class DeviceFilesModel: ObservableObject {
     @Published var statusText: String = ""
     @Published var selection: Set<String> = []
 
+    /// Номер последнего запроса. Ответы на устаревшие запросы
+    /// (пользователь уже перешёл в другую папку или сменил телефон)
+    /// не должны перетирать текущий список.
+    private var loadToken = UUID()
+
     init(serial: String?) {
         self.serial = serial
         reload()
     }
 
     func reload() {
+        let token = UUID()
+        loadToken = token
+
         guard let serial, !serial.isEmpty else {
             entries = []
+            isLoading = false
             errorText = "Телефон не подключён"
             return
         }
@@ -99,14 +108,14 @@ final class DeviceFilesModel: ObservableObject {
             do {
                 let items = try AdbFileService.list(path: current, serial: serial)
                 DispatchQueue.main.async {
-                    guard let self else { return }
+                    guard let self, self.loadToken == token else { return }
                     self.entries = items
                     self.isLoading = false
                     self.statusText = "\(items.count) объектов · \(current)"
                 }
             } catch {
                 DispatchQueue.main.async {
-                    guard let self else { return }
+                    guard let self, self.loadToken == token else { return }
                     self.entries = []
                     self.isLoading = false
                     self.errorText = error.localizedDescription
@@ -198,7 +207,7 @@ final class DeviceFilesModel: ObservableObject {
 
     /// Загрузка конкретных URL (в том числе из перетаскивания).
     func upload(urls: [URL], serial: String?) {
-        guard let serial, !urls.isEmpty else { return }
+        guard let serial = serial ?? self.serial, !urls.isEmpty else { return }
 
         let target = path.hasSuffix("/") ? path : path + "/"
         statusText = "Загружаю \(urls.count) объект(ов)…"
@@ -225,48 +234,388 @@ final class DeviceFilesModel: ObservableObject {
     }
 }
 
-// MARK: - Провайдер для перетаскивания
+// MARK: - Список файлов на AppKit
 
-/// Готовит NSItemProvider для перетаскивания файла из телефона наружу.
-/// Файл скачивается лениво: только когда пользователь отпустил его в Finder.
-enum DragProvider {
+/// SwiftUI `List` с `.onDrag`/`.onDrop` на macOS не даёт настоящих файловых
+/// обещаний: Finder может не принять такой провайдер, а `.onDrop` поверх
+/// `List` не всегда ловит перетаскивание. Поэтому список — `NSTableView`:
+/// drag-out идёт через `NSFilePromiseProvider` (файл скачивается в момент
+/// отпускания), drag-in — через обычный `registerForDraggedTypes`.
+private struct FileListView: NSViewRepresentable {
 
-    static func make(for entry: AdbFileService.Entry, serial: String?) -> NSItemProvider {
-        let provider = NSItemProvider()
+    let entries: [AdbFileService.Entry]
+    let serial: String?
+    @Binding var selection: Set<String>
+    let onOpen: (AdbFileService.Entry) -> Void
+    let onDownload: (AdbFileService.Entry) -> Void
+    let onUpload: ([URL]) -> Void
 
-        let type = UTType(filenameExtension: (entry.name as NSString).pathExtension) ?? .data
-        let remote = entry.path
-        let name = entry.name
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
 
-        provider.suggestedName = name
-        provider.registerFileRepresentation(
-            forTypeIdentifier: type.identifier,
-            fileOptions: [],
-            visibility: .all
-        ) { completion in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    let url = try AdbFileService.pullToTemporary(
-                        remote: remote,
-                        name: name,
-                        serial: serial
-                    )
-                    completion(url, false, nil)
-                } catch {
-                    completion(nil, false, error)
-                }
-            }
-            return nil
+    func makeNSView(context: Context) -> NSScrollView {
+        let table = FileTableView()
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
+        column.resizingMask = .autoresizingMask
+        table.addTableColumn(column)
+        table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        table.headerView = nil
+        table.rowHeight = 26
+        table.intercellSpacing = NSSize(width: 0, height: 0)
+        table.backgroundColor = .clear
+        table.usesAlternatingRowBackgroundColors = false
+        table.selectionHighlightStyle = .regular
+        table.allowsMultipleSelection = true
+        table.allowsEmptySelection = true
+        table.style = .inset
+        table.registerForDraggedTypes([.fileURL, .URL])
+        table.dataSource = context.coordinator
+        table.delegate = context.coordinator
+        table.target = context.coordinator
+        table.doubleAction = #selector(Coordinator.openRow)
+        table.menu = context.coordinator.makeMenu()
+        // Файловые обещания всегда копируются в место назначения.
+        table.setDraggingSourceOperationMask(.copy, forLocal: false)
+        table.setDraggingSourceOperationMask(.copy, forLocal: true)
+        context.coordinator.tableView = table
+
+        let scroll = NSScrollView()
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.update(entries: entries, serial: serial, selection: selection)
+    }
+
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSFilePromiseProviderDelegate {
+
+        var parent: FileListView
+        weak var tableView: NSTableView?
+
+        private var entries: [AdbFileService.Entry] = []
+        private var serial: String?
+        private var applyingSelection = false
+
+        init(_ parent: FileListView) {
+            self.parent = parent
         }
 
-        return provider
+        func update(entries: [AdbFileService.Entry], serial: String?, selection: Set<String>) {
+            let changed = entries != self.entries
+            self.entries = entries
+            self.serial = serial
+
+            guard let tableView else { return }
+
+            // reloadData и восстановление выделения сами по себе присылают
+            // tableViewSelectionDidChange. Пока обновляемся, не отдаём это
+            // модели, иначе она решит, что пользователь снял выделение.
+            applyingSelection = true
+
+            if changed {
+                tableView.reloadData()
+            }
+
+            var indexes = IndexSet()
+            for (index, entry) in entries.enumerated() where selection.contains(entry.path) {
+                indexes.insert(index)
+            }
+            if tableView.selectedRowIndexes != indexes {
+                tableView.selectRowIndexes(indexes, byExtendingSelection: false)
+            }
+
+            applyingSelection = false
+        }
+
+        // MARK: Данные
+
+        func numberOfRows(in tableView: NSTableView) -> Int {
+            entries.count
+        }
+
+        func tableView(
+            _ tableView: NSTableView,
+            viewFor tableColumn: NSTableColumn?,
+            row: Int
+        ) -> NSView? {
+            guard entries.indices.contains(row) else { return nil }
+
+            let identifier = NSUserInterfaceItemIdentifier("FileCell")
+            let cell = (tableView.makeView(withIdentifier: identifier, owner: self) as? FileCellView)
+                ?? FileCellView()
+            cell.identifier = identifier
+            cell.configure(entries[row])
+            return cell
+        }
+
+        func tableViewSelectionDidChange(_ notification: Notification) {
+            guard !applyingSelection, let tableView else { return }
+
+            let paths = tableView.selectedRowIndexes.compactMap { index -> String? in
+                entries.indices.contains(index) ? entries[index].path : nil
+            }
+            let newSelection = Set(paths)
+            if parent.selection != newSelection {
+                parent.selection = newSelection
+            }
+        }
+
+        // MARK: Двойной клик и меню
+
+        @objc func openRow() {
+            guard let tableView, tableView.clickedRow >= 0,
+                  entries.indices.contains(tableView.clickedRow) else { return }
+            let entry = entries[tableView.clickedRow]
+            if entry.isDirectory {
+                parent.onOpen(entry)
+            } else {
+                parent.selection = [entry.path]
+            }
+        }
+
+        func makeMenu() -> NSMenu {
+            let menu = NSMenu()
+
+            let open = NSMenuItem(title: "Открыть", action: #selector(openSelected), keyEquivalent: "")
+            open.target = self
+            menu.addItem(open)
+
+            let download = NSMenuItem(
+                title: "Скачать в Загрузки…",
+                action: #selector(downloadSelected),
+                keyEquivalent: ""
+            )
+            download.target = self
+            menu.addItem(download)
+
+            return menu
+        }
+
+        @objc private func openSelected() {
+            guard let row = tableView?.clickedRow, entries.indices.contains(row) else { return }
+            let entry = entries[row]
+            if entry.isDirectory {
+                parent.onOpen(entry)
+            } else {
+                parent.selection = [entry.path]
+            }
+        }
+
+        @objc private func downloadSelected() {
+            guard let row = tableView?.clickedRow, entries.indices.contains(row) else { return }
+            parent.onDownload(entries[row])
+        }
+
+        // MARK: Перетаскивание наружу (файловое обещание)
+
+        func tableView(
+            _ tableView: NSTableView,
+            pasteboardWriterForRow row: Int
+        ) -> (any NSPasteboardWriting)? {
+            guard entries.indices.contains(row) else { return nil }
+            let entry = entries[row]
+
+            let type: UTType
+            if entry.isDirectory {
+                type = .folder
+            } else {
+                type = UTType(filenameExtension: (entry.name as NSString).pathExtension) ?? .data
+            }
+
+            let provider = NSFilePromiseProvider(fileType: type.identifier, delegate: self)
+            provider.userInfo = PromiseInfo(entry: entry, serial: serial)
+            return provider
+        }
+
+        func filePromiseProvider(
+            _ filePromiseProvider: NSFilePromiseProvider,
+            fileNameForType fileType: String
+        ) -> String {
+            (filePromiseProvider.userInfo as? PromiseInfo)?.entry.name ?? "file"
+        }
+
+        func filePromiseProvider(
+            _ filePromiseProvider: NSFilePromiseProvider,
+            writePromiseTo url: URL,
+            completionHandler: @escaping (Error?) -> Void
+        ) {
+            guard let info = filePromiseProvider.userInfo as? PromiseInfo else {
+                completionHandler(AdbFileService.FileError.noDevice)
+                return
+            }
+
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try AdbFileService.pullForPromise(
+                        remote: info.entry.path,
+                        name: info.entry.name,
+                        to: url,
+                        serial: info.serial
+                    )
+                    completionHandler(nil)
+                } catch {
+                    completionHandler(error)
+                }
+            }
+        }
+
+        // MARK: Перетаскивание внутрь (загрузка на телефон)
+
+        func tableView(
+            _ tableView: NSTableView,
+            validateDrop info: NSDraggingInfo,
+            proposedRow row: Int,
+            proposedDropOperation dropOperation: NSTableView.DropOperation
+        ) -> NSDragOperation {
+            // Внутренние перетаскивания строк нам не нужны.
+            if (info.draggingSource as? NSTableView) === tableView {
+                return []
+            }
+
+            let options: [NSPasteboard.ReadingOptionKey: Any] = [
+                .urlReadingFileURLsOnly: true
+            ]
+            guard info.draggingPasteboard.canReadObject(
+                forClasses: [NSURL.self],
+                options: options
+            ) else {
+                return []
+            }
+            return .copy
+        }
+
+        func tableView(
+            _ tableView: NSTableView,
+            acceptDrop info: NSDraggingInfo,
+            row: Int,
+            dropOperation: NSTableView.DropOperation
+        ) -> Bool {
+            let options: [NSPasteboard.ReadingOptionKey: Any] = [
+                .urlReadingFileURLsOnly: true
+            ]
+            guard let objects = info.draggingPasteboard.readObjects(
+                forClasses: [NSURL.self],
+                options: options
+            ) as? [NSURL], !objects.isEmpty else {
+                return false
+            }
+
+            parent.onUpload(objects.map { $0 as URL })
+            return true
+        }
+
+        private struct PromiseInfo {
+            let entry: AdbFileService.Entry
+            let serial: String?
+        }
     }
 }
+
+/// `NSTableView`, который перед контекстным меню выделяет строку под курсором.
+private final class FileTableView: NSTableView {
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: point)
+        if row >= 0, !selectedRowIndexes.contains(row) {
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        return super.menu(for: event)
+    }
+}
+
+/// Строка списка: иконка, имя, размер, дата.
+private final class FileCellView: NSTableCellView {
+
+    private let iconView = NSImageView()
+    private let nameField = NSTextField(labelWithString: "")
+    private let sizeField = NSTextField(labelWithString: "")
+    private let dateField = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) не поддерживается")
+    }
+
+    private func setup() {
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        nameField.translatesAutoresizingMaskIntoConstraints = false
+        sizeField.translatesAutoresizingMaskIntoConstraints = false
+        dateField.translatesAutoresizingMaskIntoConstraints = false
+
+        nameField.font = .systemFont(ofSize: 12)
+        nameField.lineBreakMode = .byTruncatingMiddle
+        nameField.maximumNumberOfLines = 1
+        nameField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        nameField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        sizeField.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        sizeField.textColor = .secondaryLabelColor
+        sizeField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        sizeField.setContentHuggingPriority(.required, for: .horizontal)
+
+        dateField.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        dateField.textColor = .tertiaryLabelColor
+        dateField.alignment = .right
+        dateField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        dateField.setContentHuggingPriority(.required, for: .horizontal)
+
+        addSubview(iconView)
+        addSubview(nameField)
+        addSubview(sizeField)
+        addSubview(dateField)
+
+        NSLayoutConstraint.activate([
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 16),
+            iconView.heightAnchor.constraint(equalToConstant: 16),
+
+            nameField.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 9),
+            nameField.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            sizeField.leadingAnchor.constraint(
+                greaterThanOrEqualTo: nameField.trailingAnchor,
+                constant: 8
+            ),
+            sizeField.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            dateField.leadingAnchor.constraint(equalTo: sizeField.trailingAnchor, constant: 12),
+            dateField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            dateField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            dateField.widthAnchor.constraint(equalToConstant: 100),
+        ])
+    }
+
+    func configure(_ entry: AdbFileService.Entry) {
+        nameField.stringValue = entry.name
+        sizeField.stringValue = entry.sizeText
+        dateField.stringValue = entry.modified
+
+        let configuration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        iconView.image = NSImage(
+            systemSymbolName: entry.iconName,
+            accessibilityDescription: entry.name
+        )?.withSymbolConfiguration(configuration)
+        iconView.contentTintColor = entry.isDirectory ? .controlAccentColor : .secondaryLabelColor
+    }
+}
+
+// MARK: - Экран
 
 struct DeviceFilesView: View {
 
     @ObservedObject var model: DeviceFilesModel
-    @State private var dropTargeted = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -277,17 +626,6 @@ struct DeviceFilesView: View {
             statusBar
         }
         .frame(minWidth: 520, minHeight: 380)
-        .overlay {
-            if dropTargeted {
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(Color.accentColor, lineWidth: 3)
-                    .padding(6)
-                    .allowsHitTesting(false)
-            }
-        }
-        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
-            handleDrop(providers)
-        }
     }
 
     // MARK: Путь
@@ -355,84 +693,21 @@ struct DeviceFilesView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(selection: $model.selection) {
-                    ForEach(model.entries) { entry in
-                        row(for: entry)
+                FileListView(
+                    entries: model.entries,
+                    serial: model.serial,
+                    selection: $model.selection,
+                    onOpen: { model.open($0) },
+                    onDownload: { entry in
+                        model.selection = [entry.path]
+                        model.downloadSelected()
+                    },
+                    onUpload: { urls in
+                        model.upload(urls: urls, serial: model.serial)
                     }
-                }
-                .listStyle(.inset)
+                )
             }
         }
-    }
-
-    private func row(for entry: AdbFileService.Entry) -> some View {
-        HStack(spacing: 9) {
-            Image(systemName: entry.iconName)
-                .foregroundStyle(entry.isDirectory ? Color.accentColor : Color.secondary)
-                .frame(width: 18)
-
-            Text(entry.name)
-                .font(.system(size: 12))
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            Spacer(minLength: 8)
-
-            Text(entry.sizeText)
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-                .monospacedDigit()
-
-            Text(entry.modified)
-                .font(.system(size: 10))
-                .foregroundStyle(.quaternary)
-                .frame(width: 100, alignment: .trailing)
-        }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            if entry.isDirectory {
-                model.open(entry)
-            } else {
-                model.selection = [entry.path]
-            }
-        }
-        // Перетаскивание наружу: файл скачается, когда его отпустят в Finder.
-        .onDrag {
-            DragProvider.make(for: entry, serial: model.serial)
-        }
-        .contextMenu {
-            if entry.isDirectory {
-                Button("Открыть") { model.open(entry) }
-            }
-            Button("Скачать в Загрузки…") {
-                model.selection = [entry.path]
-                model.downloadSelected()
-            }
-        }
-    }
-
-    // MARK: Загрузка перетаскиванием
-
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        var accepted = false
-
-        for provider in providers {
-            guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else {
-                continue
-            }
-            accepted = true
-
-            // loadItem устарел в macOS 27 — используем loadObject(ofClass:).
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let fileURL = url else { return }
-                DispatchQueue.main.async {
-                    model.upload(urls: [fileURL], serial: model.serial)
-                }
-            }
-        }
-
-        return accepted
     }
 
     // MARK: Статус
@@ -444,7 +719,7 @@ struct DeviceFilesView: View {
                     .controlSize(.small)
             }
 
-            Text(model.statusText.isEmpty ? "Перетащи файл наружу — он скачается сам" : model.statusText)
+            Text(model.statusText.isEmpty ? "Перетащи файл из списка в Finder — он скачается сам" : model.statusText)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

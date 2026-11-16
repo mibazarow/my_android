@@ -161,7 +161,9 @@ enum AdbFileService {
 
         let stderr = Pipe()
         process.standardError = stderr
-        process.standardOutput = Pipe()
+        // Прогресс adb не нужен, а нечитаемая труба stdout может
+        // заполниться на большом файле и заблокировать передачу.
+        process.standardOutput = FileHandle.nullDevice
 
         try process.run()
         process.waitUntilExit()
@@ -184,7 +186,9 @@ enum AdbFileService {
 
         let stderr = Pipe()
         process.standardError = stderr
-        process.standardOutput = Pipe()
+        // Прогресс adb не нужен, а нечитаемая труба stdout может
+        // заполниться на большом файле и заблокировать передачу.
+        process.standardOutput = FileHandle.nullDevice
 
         try process.run()
         process.waitUntilExit()
@@ -200,19 +204,33 @@ enum AdbFileService {
     /// Download — самое предсказуемое место: его видно в файловом менеджере.
     static let defaultUploadDirectory = "/sdcard/Download"
 
-    /// Скачивает файл или папку во временный каталог и возвращает URL.
-    /// Нужно для перетаскивания: Finder сам скопирует файл из temp.
-    static func pullToTemporary(remote: String, name: String, serial: String?) throws -> URL {
-        let tempRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MyAndroidDrag", isDirectory: true)
-        try? FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+    /// Скачивает файл в точный путь назначения, который выдала система
+    /// (Finder для файлового обещания). Сначала качает во временную папку:
+    /// если качать сразу в место, где Finder уже создал пустую заготовку,
+    /// `adb pull` может повести себя по-разному.
+    static func pullForPromise(
+        remote: String,
+        name: String,
+        to destination: URL,
+        serial: String?
+    ) throws {
+        let fm = FileManager.default
+        let staging = fm.temporaryDirectory
+            .appendingPathComponent("MyAndroidPromise-\(UUID().uuidString)", isDirectory: true)
 
-        // Отдельная папка на каждую передачу: имена могут повторяться.
-        let target = tempRoot
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            .appendingPathComponent(name)
+        do {
+            try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+            let staged = staging.appendingPathComponent(name)
+            try pull(remote: remote, to: staged, serial: serial)
 
-        try pull(remote: remote, to: target, serial: serial)
-        return target
+            if fm.fileExists(atPath: destination.path) {
+                try fm.removeItem(at: destination)
+            }
+            try fm.moveItem(at: staged, to: destination)
+            try? fm.removeItem(at: staging)
+        } catch {
+            try? fm.removeItem(at: staging)
+            throw error
+        }
     }
 }

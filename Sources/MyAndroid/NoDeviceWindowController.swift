@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 /// Окно-подсказка на случай, когда телефон не подключён.
 ///
@@ -17,7 +18,8 @@ final class NoDeviceWindowController: NSWindowController {
     /// Живой экземпляр: держит окно, пока его не закроют.
     private static var current: NoDeviceWindowController?
 
-    private var pollTimer: Timer?
+    /// Подписка на состояние телефона вместо отдельного таймера с adb.
+    private var cancellable: AnyCancellable?
 
     /// Показывает окно-подсказку. Повторный вызов переиспользует существующее.
     static func present() {
@@ -49,9 +51,8 @@ final class NoDeviceWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         self.init(window: window)
 
-        window.contentView = NSHostingView(rootView: NoDeviceView(onClose: { [weak self] in
-            self?.dismiss()
-        }))
+        window.delegate = self
+        window.contentView = NSHostingView(rootView: NoDeviceView())
     }
 
     /// Показывает окно и следит за подключением телефона.
@@ -63,20 +64,19 @@ final class NoDeviceWindowController: NSWindowController {
         NSApp.activate(ignoringOtherApps: true)
 
         // Как только телефон появился — окно убираем, зеркало поднимется само.
-        pollTimer?.invalidate()
-        let timer = Timer(timeInterval: 1.5, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            if !DeviceScanner.scan().filter({ $0.isReady }).isEmpty {
-                self.dismiss()
+        // Никакого собственного опроса adb здесь нет: он уже идёт в
+        // MirrorController, и второй экземпляр только зря дёргал бы телефон.
+        cancellable = MirrorController.shared.$devices
+            .receive(on: RunLoop.main)
+            .sink { [weak self] devices in
+                if devices.contains(where: { $0.isReady }) {
+                    self?.dismiss()
+                }
             }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        pollTimer = timer
     }
 
     func dismiss() {
-        pollTimer?.invalidate()
-        pollTimer = nil
+        cancellable = nil
         close()
         if NoDeviceWindowController.current === self {
             NoDeviceWindowController.current = nil
@@ -84,13 +84,20 @@ final class NoDeviceWindowController: NSWindowController {
     }
 
     deinit {
-        pollTimer?.invalidate()
+        cancellable = nil
+    }
+}
+
+extension NoDeviceWindowController: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        cancellable = nil
+        if NoDeviceWindowController.current === self {
+            NoDeviceWindowController.current = nil
+        }
     }
 }
 
 private struct NoDeviceView: View {
-    let onClose: () -> Void
-
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "iphone.gen3.badge.exclamationmark")

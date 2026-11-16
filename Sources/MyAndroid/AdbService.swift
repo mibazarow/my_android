@@ -22,7 +22,9 @@ enum AdbService {
 
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        // stderr не нужен для разбора, но если оставить нечитаемую трубу,
+        // шумная команда может заполнить её и заблокироваться навсегда.
+        process.standardError = FileHandle.nullDevice
 
         do {
             try process.run()
@@ -141,8 +143,8 @@ enum AdbService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: adb)
         process.arguments = ["kill-server"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
 
         try? process.run()
         process.waitUntilExit()

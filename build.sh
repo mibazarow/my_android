@@ -52,6 +52,12 @@ cp "$BUILD_DIR/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 cp Resources/Android_Mirror_Start.sh "$CONTENTS/Resources/Android_Mirror_Start.sh"
 chmod +x "$CONTENTS/Resources/Android_Mirror_Start.sh"
 
+# Иконки окна scrcpy. Без них движок каждый запуск пишет в журнал
+# «Could not open icon image» и ищет их в /usr/local/share.
+mkdir -p "$CONTENTS/Resources/icons"
+cp vendor/scrcpy/app/data/scrcpy.png "$CONTENTS/Resources/icons/scrcpy.png"
+cp vendor/scrcpy/app/data/disconnected.png "$CONTENTS/Resources/icons/disconnected.png"
+
 # 4) Своя сборка зеркалирующего движка из исходников vendor/scrcpy.
 #    Не зависим от версии, которую ставит Homebrew: коммит зафиксирован,
 #    бинарник собирается из кода в репозитории.

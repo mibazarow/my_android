@@ -249,7 +249,7 @@ while !queue.isEmpty {
 print("→ переписываю пути на @loader_path")
 
 // Сначала собственный id каждой библиотеки, потом ссылки на неё.
-for (real, name) in bundledNames where name.hasSuffix(".dylib") {
+for (_, name) in bundledNames where name.hasSuffix(".dylib") {
     let target = (binDir as NSString).appendingPathComponent(name)
     run("/usr/bin/install_name_tool", ["-id", "@loader_path/\(name)", target])
 }

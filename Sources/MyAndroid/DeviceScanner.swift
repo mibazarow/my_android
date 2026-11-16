@@ -42,7 +42,7 @@ enum DeviceScanner {
 
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
 
         do {
             try process.run()
@@ -117,8 +117,8 @@ enum DeviceScanner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: adb)
         process.arguments = ["start-server"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         try? process.run()
         process.waitUntilExit()
     }

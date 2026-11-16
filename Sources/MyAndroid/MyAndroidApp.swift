@@ -28,6 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // скрытой иконкой, поэтому в Dock остаётся ровно один значок — наш.
         NSApp.setActivationPolicy(.regular)
 
+        // Без явного запроса разрешения системные уведомления молча
+        // выбрасываются, и «Скриншот сохранён» никогда не появляется.
+        UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+
         setupStatusItem()
         observeState()
         updateStatusIcon()
@@ -42,14 +47,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // иконка в меню-баре. Без телефона показываем окно-подсказку,
         // иначе кажется, что приложение не запустилось.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            self?.showNoDeviceHintIfNeeded()
+            self?.showNoDeviceHintIfNeeded(attempt: 0)
         }
     }
 
     /// Окно-подсказку показываем только если телефона нет.
     /// Контроллер сам себя удерживает, поэтому локальной переменной достаточно.
-    private func showNoDeviceHintIfNeeded() {
+    private func showNoDeviceHintIfNeeded(attempt: Int) {
         guard controller.readyDevice == nil else { return }
+
+        // Холодный `adb start-server` может занять несколько секунд.
+        // Ждём результата опроса, чтобы не мигнуть подсказкой зря.
+        if controller.devices.isEmpty && controller.state == .idle && attempt < 5 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.showNoDeviceHintIfNeeded(attempt: attempt + 1)
+            }
+            return
+        }
+
         NoDeviceWindowController.present()
     }
 
@@ -142,9 +157,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: "f"
         )
         files.target = self
-        files.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Файлы")
+        files.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Файлы")
         files.isEnabled = connected
         menu.addItem(files)
+
+        // Отправка файлов на телефон без перетаскивания: просто выбрать
+        // файл в Finder и нажать «Отправить».
+        let send = NSMenuItem(
+            title: "Отправить файл на телефон…",
+            action: #selector(sendFileToPhone),
+            keyEquivalent: "u"
+        )
+        send.target = self
+        send.image = NSImage(systemSymbolName: "arrow.up.doc", accessibilityDescription: "Отправить")
+        send.isEnabled = connected
+        menu.addItem(send)
+
+        menu.addItem(.separator())
+
+        let log = NSMenuItem(
+            title: "Журнал зеркала…",
+            action: #selector(showMirrorLog),
+            keyEquivalent: ""
+        )
+        log.target = self
+        log.image = NSImage(systemSymbolName: "doc.text.magnifyingglass", accessibilityDescription: "Журнал")
+        menu.addItem(log)
+
+        let help = NSMenuItem(
+            title: "Как копировать и перетаскивать…",
+            action: #selector(showHelp),
+            keyEquivalent: ""
+        )
+        help.target = self
+        help.image = NSImage(systemSymbolName: "questionmark.circle", accessibilityDescription: "Справка")
+        menu.addItem(help)
 
         menu.addItem(.separator())
 
@@ -304,10 +351,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Отправляет выбранные в Finder файлы в Download на телефоне.
+    @objc private func sendFileToPhone() {
+        guard let serial = controller.readyDevice?.serial else { return }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Отправить"
+        panel.message = "Файлы будут загружены в папку Download на телефоне"
+
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        let urls = panel.urls
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var failures: [String] = []
+            var sent = 0
+
+            for url in urls {
+                do {
+                    try AdbFileService.push(
+                        local: url,
+                        to: AdbFileService.defaultUploadDirectory,
+                        serial: serial
+                    )
+                    sent += 1
+                } catch {
+                    failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if failures.isEmpty {
+                    self.post(title: "Отправлено на телефон", body: "\(sent) → Download")
+                } else {
+                    self.post(
+                        title: "Не всё отправлено",
+                        body: failures.joined(separator: "; ")
+                    )
+                }
+            }
+        }
+    }
+
+    @objc private func showMirrorLog() {
+        MirrorLog.prepare()
+        NSWorkspace.shared.open(MirrorLog.fileURL)
+    }
+
+    @objc private func showHelp() {
+        let alert = NSAlert()
+        alert.messageText = "Как копировать и перетаскивать"
+        alert.informativeText = """
+        Буфер обмена
+        • Mac → телефон: скопируй текст на Mac (⌘C), кликни в поле на экране телефона и нажми ⌘V в окне зеркала.
+        • Телефон → Mac: выдели и скопируй текст на телефоне — он сразу окажется в буфере Mac.
+
+        Файлы
+        • Mac → телефон: перетащи файл на окно зеркала или в окно «Файлы телефона» (⌘F). Ещё можно выбрать «Отправить файл на телефон…».
+        • Телефон → Mac: открой «Файлы телефона» (⌘F) и перетащи файл оттуда в Finder. Перетаскивание прямо из окна зеркала не поддерживается движком scrcpy.
+        """
+        alert.addButton(withTitle: "Понятно")
+        alert.runModal()
+    }
+
     private func post(title: String, body: String) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
+        content.sound = .default
 
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
@@ -353,7 +467,21 @@ extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         rebuildMenu()
         // Обновляем батарею при открытии меню: цифра должна быть свежей.
-        controller.refresh()
+        controller.refresh(forceDetails: true)
+    }
+}
+
+// MARK: - Уведомления
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    /// Показываем баннер даже когда приложение активно: иначе скриншот
+    /// сохраняется «молча» и непонятно, сработало ли.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 }
 

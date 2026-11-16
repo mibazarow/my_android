@@ -43,14 +43,22 @@ final class MirrorController: ObservableObject {
     /// Окно зеркала закрыли вручную — приложение должно выйти.
     var onWindowClosed: (() -> Void)?
 
+    /// Опрос adb и чтение батареи идут здесь, а не на главном потоке:
+    /// `adb devices` — это отдельный процесс, и его ожидание подвешивало меню.
+    private let scanQueue = DispatchQueue(label: "ru.bazarow.myandroid.scan", qos: .userInitiated)
+    private var scanInFlight = false
+    private var lastDetailsSerial: String?
+    private var lastDetailsAt = Date.distantPast
+    private var lastLaunchAttempt = Date.distantPast
+
     private var process: Process?
     private var pollTimer: Timer?
     private var restarting = false
-    /// Телефон отваливался — ждём его возвращения, а не выходим.
-    private var waitingForReconnect = false
 
     private init() {
         self.settings = MirrorSettings.load()
+
+        MirrorLog.prepare()
 
         // Прибираем процессы scrcpy, оставшиеся от прошлого запуска.
         // Если приложение в прошлый раз упало или его убили, scrcpy
@@ -69,40 +77,64 @@ final class MirrorController: ObservableObject {
         RunLoop.main.add(timer, forMode: .common)
         pollTimer = timer
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // Первый опрос — сразу после старта. start-server может занять
+        // несколько секунд, поэтому он тоже уходит в фоновую очередь.
+        scanQueue.async { [weak self] in
             DeviceScanner.startADBServer()
-            self?.refresh()
+            DispatchQueue.main.async {
+                self?.refresh()
+            }
         }
     }
 
     /// Опрос устройств, батареи и инфо. Поднимает зеркало, когда телефон готов.
-    func refresh() {
-        let found = DeviceScanner.scan()
+    ///
+    /// - Parameter forceDetails: перечитать батарею и модель, не дожидаясь
+    ///   десятисекундного интервала (нужно при открытии меню).
+    func refresh(forceDetails: Bool = false) {
+        scanQueue.async { [weak self] in
+            guard let self, !self.scanInFlight else { return }
+            self.scanInFlight = true
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if self.devices != found {
-                self.devices = found
+            let found = DeviceScanner.scan()
+            let readySerial = found.first(where: { $0.isReady })?.serial
+
+            var battery: AdbService.Battery?
+            var info: AdbService.DeviceInfo?
+
+            let needDetails: Bool
+            if let readySerial {
+                needDetails = forceDetails
+                    || self.lastDetailsSerial != readySerial
+                    || Date().timeIntervalSince(self.lastDetailsAt) > 10
+                if needDetails {
+                    battery = AdbService.battery(serial: readySerial)
+                    info = AdbService.deviceInfo(serial: readySerial)
+                    self.lastDetailsSerial = readySerial
+                    self.lastDetailsAt = Date()
+                }
+            } else {
+                needDetails = false
+                self.lastDetailsSerial = nil
             }
-            self.autostartIfReady()
-        }
 
-        // Батарея и модель меняются редко — читаем в фоне, чтобы не тормозить UI.
-        guard let serial = found.first(where: { $0.isReady })?.serial else {
-            DispatchQueue.main.async { [weak self] in
-                self?.battery = nil
-                self?.deviceInfo = nil
-            }
-            return
-        }
-
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let battery = AdbService.battery(serial: serial)
-            let info = AdbService.deviceInfo(serial: serial)
             DispatchQueue.main.async {
-                self?.battery = battery
-                self?.deviceInfo = info
+                if self.devices != found {
+                    self.devices = found
+                }
+
+                if readySerial == nil {
+                    if self.battery != nil { self.battery = nil }
+                    if self.deviceInfo != nil { self.deviceInfo = nil }
+                } else if needDetails {
+                    self.battery = battery
+                    self.deviceInfo = info
+                }
+
+                self.autostartIfReady()
             }
+
+            self.scanInFlight = false
         }
     }
 
@@ -116,45 +148,60 @@ final class MirrorController: ObservableObject {
         guard let device = readyDevice else {
             // Телефон отвалился, но окно было открыто: не выходим и не закрываем
             // окно, просто ждём. Иначе дёрнутый кабель убивает приложение.
-            if case .running = state, waitingForReconnect {
-                state = .waitingForDevice
-            } else if process == nil {
+            if state != .waitingForDevice {
                 state = .waitingForDevice
             }
             return
         }
 
-        waitingForReconnect = false
         launch(serial: device.serial)
     }
 
     // MARK: - Запуск scrcpy
 
-    private func launch(serial: String) {
+    private func launch(serial: String, force: Bool = false) {
+        // Не долбим запуском каждые две секунды, если scrcpy падает сразу.
+        if !force, Date().timeIntervalSince(lastLaunchAttempt) <= 2.0 {
+            return
+        }
+        lastLaunchAttempt = Date()
+
         guard let scrcpy = ToolLocator.scrcpy else {
-            state = .failed("scrcpy не найден. Установи: brew install scrcpy")
+            state = .failed("Не найден движок зеркалирования внутри приложения")
             return
         }
         guard ToolLocator.adb != nil else {
-            state = .failed("adb не найден. Установи: brew install --cask android-platform-tools")
+            state = .failed("Не найден adb внутри приложения")
             return
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: scrcpy)
-        process.arguments = settings.arguments(serial: serial)
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: scrcpy)
+        task.arguments = settings.arguments(serial: serial)
 
         // scrcpy вызывает adb по имени: без подмешивания PATH он его не найдёт,
         // потому что GUI-приложение не видит PATH из терминала.
         // environment() также подставляет путь к встроенному scrcpy-server.
-        process.environment = ToolLocator.environment()
+        task.environment = ToolLocator.environment()
 
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
+        // Вывод обязательно вычитываем. Иначе буфер трубы переполняется,
+        // scrcpy блокируется на записи и зеркало замирает.
+        let stdout = Pipe()
+        let stderr = Pipe()
+        task.standardOutput = stdout
+        task.standardError = stderr
+        MirrorController.drain(stdout)
+        MirrorController.drain(stderr)
 
-        process.terminationHandler = { [weak self] finished in
+        task.terminationHandler = { [weak self] finished in
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
+
             DispatchQueue.main.async {
                 guard let self else { return }
+                // Старый обработчик мог сработать уже после перезапуска —
+                // чужой процесс не должен обнулять новый.
+                guard self.process === finished else { return }
                 self.process = nil
 
                 if self.restarting {
@@ -171,38 +218,51 @@ final class MirrorController: ObservableObject {
                     if deviceStillThere {
                         self.onWindowClosed?()
                     } else {
-                        self.waitingForReconnect = true
                         self.state = .waitingForDevice
                     }
                 } else if deviceStillThere {
                     self.state = .failed("scrcpy завершился с кодом \(finished.terminationStatus)")
                 } else {
-                    self.waitingForReconnect = true
                     self.state = .waitingForDevice
                 }
             }
         }
 
         do {
-            try process.run()
-            self.process = process
+            try task.run()
+            self.process = task
             state = .running
         } catch {
-            state = .failed("Не удалось запустить scrcpy: \(error.localizedDescription)")
+            state = .failed("Не удалось запустить зеркало: \(error.localizedDescription)")
+        }
+    }
+
+    /// Постоянно читает трубу и складывает вывод в журнал.
+    private static func drain(_ pipe: Pipe) {
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
+            MirrorLog.append(data)
         }
     }
 
     /// Перезапуск с новыми флагами: scrcpy читает их только при старте.
     private func applyAlwaysOnTop() {
-        guard let device = readyDevice, process != nil else { return }
+        guard let device = readyDevice, let old = process else { return }
 
         restarting = true
-        process?.terminate()
         process = nil
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.restarting = false
-            self?.launch(serial: device.serial)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            MirrorController.stop(old)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                guard let self, self.restarting else { return }
+                self.restarting = false
+                self.launch(serial: device.serial, force: true)
+            }
         }
     }
 
@@ -228,7 +288,10 @@ final class MirrorController: ObservableObject {
         pollTimer = nil
         restarting = true
 
-        terminateMirror()
+        if let process {
+            MirrorController.stop(process)
+            self.process = nil
+        }
 
         // На всякий случай добиваем всё, что могло остаться от этого бандла:
         // scrcpy мог успеть породить потомков или пережить предыдущий запуск.
@@ -237,27 +300,24 @@ final class MirrorController: ObservableObject {
         // Гасим adb-демон: он остаётся жить после выхода и висит в системе.
         // При следующем запуске он поднимется сам.
         AdbService.killServer()
+
+        MirrorLog.close()
     }
 
-    /// Убивает текущий процесс scrcpy, если он есть.
-    private func terminateMirror() {
-        guard let process else { return }
+    /// Останавливает процесс: SIGTERM, до 2 секунд ожидания, затем SIGKILL.
+    static func stop(_ process: Process) {
+        guard process.isRunning else { return }
 
-        if process.isRunning {
-            process.terminate()
+        process.terminate()
 
-            // Ждём до 2 секунд на штатное завершение.
-            let deadline = Date().addingTimeInterval(2.0)
-            while process.isRunning && Date() < deadline {
-                usleep(50_000)
-            }
-
-            if process.isRunning {
-                kill(process.processIdentifier, SIGKILL)
-            }
+        let deadline = Date().addingTimeInterval(2.0)
+        while process.isRunning && Date() < deadline {
+            usleep(50_000)
         }
 
-        self.process = nil
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+        }
     }
 
     /// Убивает процессы scrcpy, оставшиеся от прошлых запусков приложения.
@@ -274,7 +334,7 @@ final class MirrorController: ObservableObject {
 
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
 
         do {
             try process.run()

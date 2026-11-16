@@ -90,6 +90,15 @@ enum ToolLocator {
             env["SCRCPY_SERVER_PATH"] = server
         }
 
+        // Иконки окна лежат в бандле, а не в /usr/local/share/icons:
+        // иначе scrcpy на каждом старте пишет ошибку в журнал.
+        if let resources = Bundle.main.resourceURL {
+            let icons = resources.appendingPathComponent("icons").path
+            if FileManager.default.fileExists(atPath: icons) {
+                env["SCRCPY_ICON_DIR"] = icons
+            }
+        }
+
         // scrcpy построен на SDL, а SDL регистрирует процесс в системе как
         // полноценное GUI-приложение: он попадает в Dock со своей иконкой.
         // Нам нужна только иконка My Android, поэтому просим SDL не считать

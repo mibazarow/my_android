@@ -75,15 +75,23 @@ enum ScreenshotService {
         let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
 
-        let url = desktop.appendingPathComponent(fileName())
+        // Два снимка в одну секунду не должны затирать друг друга.
+        var url = desktop.appendingPathComponent(fileName())
+        var attempt = 1
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = desktop.appendingPathComponent(fileName(suffix: attempt))
+            attempt += 1
+        }
+
         try data.write(to: url)
         return url
     }
 
     /// `MyAndroid_2026-11-10_15-42-07.png`
-    private static func fileName() -> String {
+    private static func fileName(suffix: Int? = nil) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        return "MyAndroid_\(formatter.string(from: Date())).png"
+        let tail = suffix.map { "_\($0)" } ?? ""
+        return "MyAndroid_\(formatter.string(from: Date()))\(tail).png"
     }
 }
