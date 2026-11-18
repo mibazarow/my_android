@@ -475,21 +475,32 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private boolean injectChar(char c) {
         String decomposed = KeyComposition.decompose(c);
         char[] chars = decomposed != null ? decomposed.toCharArray() : new char[]{c};
+
+        int actionDisplayId = getActionDisplayId();
+        if (actionDisplayId == Device.DISPLAY_ID_NONE) {
+            return false;
+        }
+
+        // Патч HARNES-S для my_android: сначала пробуем отдать символ как
+        // есть. charMap для кириллицы возвращает null (US-таблица), а
+        // KeyEvent с юникод-кодом символа вставляется в поле напрямую.
+        if (chars.length == 1 && Device.injectChar(chars[0], actionDisplayId, Device.INJECT_MODE_ASYNC)) {
+            return true;
+        }
+
         KeyEvent[] events = charMap.getEvents(chars);
         if (events == null) {
             return false;
         }
 
-        int actionDisplayId = getActionDisplayId();
-        if (actionDisplayId != Device.DISPLAY_ID_NONE) {
-            for (KeyEvent event : events) {
-                if (!Device.injectEvent(event, actionDisplayId, Device.INJECT_MODE_ASYNC)) {
-                    return false;
-                }
+        for (KeyEvent event : events) {
+            if (!Device.injectEvent(event, actionDisplayId, Device.INJECT_MODE_ASYNC)) {
+                return false;
             }
         }
         return true;
     }
+
 
     private int injectText(String text) {
         int successCount = 0;

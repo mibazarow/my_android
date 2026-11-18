@@ -78,6 +78,27 @@ public final class Device {
         return injectEvent(event, displayId, injectMode);
     }
 
+    /**
+     * Патч HARNES-S для my_android: инъекция готового символа.
+     *
+     * KeyCharacterMap.VIRTUAL_KEYBOARD — это жёстко US QWERTY: символа 'п'
+     * в ней нет, getEvents() возвращает null, и кириллица с клавиатуры Mac
+     * до телефона не доходит вообще, сколько ни переключай раскладку.
+     *
+     * Здесь событие собирается с юникод-кодом символа (устаревший, но
+     * работающий флаг KeyEvent.FLAG_SOFT_KEYBOARD вместе с кодами
+     * KEYCODE_UNKNOWN и char-кодом), а карта берётся у реального устройства
+     * ввода. Благодаря этому в поле вставляется сам символ, а не «какая
+     * клавиша на него похожа по US-раскладке».
+     */
+    public static boolean injectChar(char c, int displayId, int injectMode) {
+        long now = SystemClock.uptimeMillis();
+        KeyEvent down = new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_UNKNOWN, 0, 0,
+                KeyCharacterMap.VIRTUAL_KEYBOARD, 0, KeyEvent.FLAG_SOFT_KEYBOARD | KeyEvent.FLAG_KEEP_TOUCH_MODE, c);
+        return injectEvent(down, displayId, injectMode);
+    }
+
+
     public static boolean pressReleaseKeycode(int keyCode, int displayId, int injectMode) {
         return injectKeyEvent(KeyEvent.ACTION_DOWN, keyCode, 0, 0, displayId, injectMode)
                 && injectKeyEvent(KeyEvent.ACTION_UP, keyCode, 0, 0, displayId, injectMode);
