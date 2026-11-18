@@ -95,31 +95,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private final boolean powerOn;
     private final boolean keepActive;
 
-    // Патч HARNES-S для my_android: раскладка для превращения символа в
-    // KeyEvent. VIRTUAL_KEYBOARD жёстко отдаёт US QWERTY — кириллица в ней
-    // отсутствует, и injectChar() возвращает false с «Could not inject char
-    // u+043f». Берём карту первого реального устройства ввода; если такого
-    // нет, падаем обратно на VIRTUAL_KEYBOARD.
-    private final KeyCharacterMap charMap = loadCharMap();
-
-    private static KeyCharacterMap loadCharMap() {
-        int[] ids = InputDevice.getDeviceIds();
-        for (int id : ids) {
-            InputDevice device = InputDevice.getDevice(id);
-            if (device == null) {
-                continue;
-            }
-            if (device.getSources() == 0) {
-                continue;
-            }
-            KeyCharacterMap map = KeyCharacterMap.load(id);
-            if (map != null) {
-                return map;
-            }
-        }
-        return KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
-    }
-
+    private final KeyCharacterMap charMap = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
 
     private final AtomicBoolean isSettingClipboard = new AtomicBoolean();
 
@@ -475,34 +451,44 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private boolean injectChar(char c) {
         String decomposed = KeyComposition.decompose(c);
         char[] chars = decomposed != null ? decomposed.toCharArray() : new char[]{c};
-
-        int actionDisplayId = getActionDisplayId();
-        if (actionDisplayId == Device.DISPLAY_ID_NONE) {
-            return false;
-        }
-
-        // Патч HARNES-S для my_android: сначала пробуем отдать символ как
-        // есть. charMap для кириллицы возвращает null (US-таблица), а
-        // KeyEvent с юникод-кодом символа вставляется в поле напрямую.
-        if (chars.length == 1 && Device.injectChar(chars[0], actionDisplayId, Device.INJECT_MODE_ASYNC)) {
-            return true;
-        }
-
         KeyEvent[] events = charMap.getEvents(chars);
         if (events == null) {
             return false;
         }
 
-        for (KeyEvent event : events) {
-            if (!Device.injectEvent(event, actionDisplayId, Device.INJECT_MODE_ASYNC)) {
-                return false;
+        int actionDisplayId = getActionDisplayId();
+        if (actionDisplayId != Device.DISPLAY_ID_NONE) {
+            for (KeyEvent event : events) {
+                if (!Device.injectEvent(event, actionDisplayId, Device.INJECT_MODE_ASYNC)) {
+                    return false;
+                }
             }
         }
         return true;
     }
 
-
     private int injectText(String text) {
+        // Патч HARNES-S для my_android: кириллица.
+        //
+        // Раньше каждый символ конвертировался в KeyEvent через
+        // charMap.getEvents(), а эта карта — US QWERTY (VIRTUAL_KEYBOARD).
+        // Для «п» она возвращает null, и символ молча терялся:
+        // «Could not inject char u+043f».
+        //
+        // Теперь сначала проверяем ВСЮ строку: если хотя бы один символ
+        // не конвертируется в key events, вставляем строку целиком через
+        // буфер обмена (setClipboard + KEYCODE_PASTE) — как Ctrl+V. Этот
+        // путь не зависит от раскладки. Проверка идёт до инъекции, иначе
+        // уже набранный префикс задвоился бы при фолбэке.
+        if (!canInjectAsKeyEvents(text)) {
+            Ln.i("Text contains characters unavailable as key events, pasting via clipboard");
+            if (pasteText(text)) {
+                return text.length();
+            }
+            Ln.w("Clipboard paste fallback failed, losing characters");
+            return 0;
+        }
+
         int successCount = 0;
         for (char c : text.toCharArray()) {
             if (!injectChar(c)) {
@@ -513,6 +499,30 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
         }
         return successCount;
     }
+
+    private boolean canInjectAsKeyEvents(String text) {
+        for (char c : text.toCharArray()) {
+            String decomposed = KeyComposition.decompose(c);
+            char[] chars = decomposed != null ? decomposed.toCharArray() : new char[]{c};
+            if (charMap.getEvents(chars) == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean pasteText(String text) {
+        if (!setClipboard(text, false, ControlMessage.SEQUENCE_INVALID)) {
+            Ln.w("Could not set clipboard for text paste fallback");
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= AndroidVersions.API_24_ANDROID_7_0 && supportsInputEvents) {
+            pressReleaseKeycode(KeyEvent.KEYCODE_PASTE, Device.INJECT_MODE_ASYNC);
+            return true;
+        }
+        return false;
+    }
+
 
     private Pair<Point, Integer> getEventPointAndDisplayId(Position position) {
         // it hides the field on purpose, to read it with atomic access
