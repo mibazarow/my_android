@@ -31,6 +31,16 @@ struct MirrorSettings: Codable, Equatable {
             "--max-fps", String(Self.maxFPS),
             "--video-codec", Self.videoCodec,
             "--stay-awake",
+            "--stay-awake",
+            // --prefer-text: передавать буквы символами, а не скан-кодами
+            // клавиш. В дефолтном режиме mixed scrcpy шлёт «нажата клавиша
+            // с такой-то позицией», и Android сам решает, какой символ это
+            // значит, — по СВОЕЙ раскладке физической клавиатуры (US QWERTY).
+            // Латиница совпадает и проходит, кириллица превращается в
+            // «Could not inject char u+043f» и не появляется вовсе, сколько
+            // ни переключай язык на телефоне. С --prefer-text символ уходит
+            // готовым через INJECT_TEXT, и раскладка Mac становится главной.
+            "--prefer-text",
             // Ни --shortcut-mod, ни --legacy-paste здесь быть не должно.
             //
             // Проверено живьём: с этими двумя флагами сессия scrcpy на
