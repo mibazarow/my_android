@@ -1,4 +1,7 @@
 project('scrcpy', 'c',
+        # Патч HARNES-S для my_android: app/src/mac_activation.m написан на
+        # Objective-C (нужен AppKit), поэтому проект объявляет и objc.
+        'objc',
         version: '4.1',
         meson_version: '>= 0.49',
         default_options: [
@@ -6,6 +9,7 @@ project('scrcpy', 'c',
             'warning_level=2',
             'b_ndebug=if-release',
         ])
+
 
 add_project_arguments('-Wmissing-prototypes', language: 'c')
 

@@ -1,5 +1,9 @@
 src = [
     'src/main.c',
+    # Патч HARNES-S для my_android: accessory-политика активации,
+    # чтобы scrcpy не показывал вторую иконку в Dock (mac_activation.h).
+    'src/mac_activation.m',
+
     'src/adb/adb.c',
     'src/adb/adb_device.c',
     'src/adb/adb_parser.c',
@@ -142,6 +146,13 @@ if host_machine.system() == 'windows'
     dependencies += cc.find_library('mingw32')
     dependencies += cc.find_library('ws2_32')
 endif
+
+# Патч HARNES-S для my_android: mac_activation.m зовёт AppKit, поэтому
+# при сборке под macOS линкуем фреймворки Cocoa (AppKit + Foundation).
+if host_machine.system() == 'darwin'
+    dependencies += dependency('appleframeworks', modules: ['AppKit', 'Foundation'])
+endif
+
 
 check_functions = [
     'strdup',

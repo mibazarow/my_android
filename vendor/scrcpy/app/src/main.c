@@ -9,7 +9,9 @@
 
 #include "cli.h"
 #include "events.h"
+#include "mac_activation.h"
 #include "options.h"
+
 #include "scrcpy.h"
 #ifdef HAVE_USB
 # include "usb/scrcpy_otg.h"
@@ -92,6 +94,13 @@ main_scrcpy(int argc, char *argv[]) {
     }
 
     sc_log_configure();
+
+    // Патч HARNES-S для my_android: до создания окна переводим процесс
+    // в accessory-политику — иконки в Dock нет, клавиатурный фокус цел.
+    // Именно этот вызов, а не SDL_MAC_BACKGROUND_APP, убирает вторую
+    // иконку, не ломая ввод с клавиатуры.
+    sc_mac_set_accessory_activation();
+
 
     if (!sc_main_thread_init()) {
         ret = SCRCPY_EXIT_FAILURE;
