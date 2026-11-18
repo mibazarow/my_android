@@ -95,7 +95,31 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     private final boolean powerOn;
     private final boolean keepActive;
 
-    private final KeyCharacterMap charMap = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
+    // Патч HARNES-S для my_android: раскладка для превращения символа в
+    // KeyEvent. VIRTUAL_KEYBOARD жёстко отдаёт US QWERTY — кириллица в ней
+    // отсутствует, и injectChar() возвращает false с «Could not inject char
+    // u+043f». Берём карту первого реального устройства ввода; если такого
+    // нет, падаем обратно на VIRTUAL_KEYBOARD.
+    private final KeyCharacterMap charMap = loadCharMap();
+
+    private static KeyCharacterMap loadCharMap() {
+        int[] ids = InputDevice.getDeviceIds();
+        for (int id : ids) {
+            InputDevice device = InputDevice.getDevice(id);
+            if (device == null) {
+                continue;
+            }
+            if (device.getSources() == 0) {
+                continue;
+            }
+            KeyCharacterMap map = KeyCharacterMap.load(id);
+            if (map != null) {
+                return map;
+            }
+        }
+        return KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
+    }
+
 
     private final AtomicBoolean isSettingClipboard = new AtomicBoolean();
 
