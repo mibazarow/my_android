@@ -99,6 +99,16 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
 
     private final AtomicBoolean isSettingClipboard = new AtomicBoolean();
 
+    // Патч HARNES-S для my_android: состояние вставки кириллицы через буфер.
+    // Буфер телефона — чужой ресурс: запоминаем, что там было, и возвращаем
+    // обратно, когда набор закончился. lastPastedText нужен, чтобы понять,
+    // писал ли кто-то в буфер после нас.
+    private final Object clipboardLock = new Object();
+    private String clipboardBackup;
+    private boolean clipboardBackupValid;
+    private String lastPastedText;
+    private long clipboardBurst;
+
     private final AtomicReference<DisplayData> displayData = new AtomicReference<>();
     private final Object displayDataAvailable = new Object(); // condition variable
 
@@ -512,15 +522,74 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
     }
 
     private boolean pasteText(String text) {
-        if (!setClipboard(text, false, ControlMessage.SEQUENCE_INVALID)) {
-            Ln.w("Could not set clipboard for text paste fallback");
-            return false;
-        }
-        if (Build.VERSION.SDK_INT >= AndroidVersions.API_24_ANDROID_7_0 && supportsInputEvents) {
-            pressReleaseKeycode(KeyEvent.KEYCODE_PASTE, Device.INJECT_MODE_ASYNC);
+        // Патч HARNES-S для my_android: фолбэк кириллицы.
+        //
+        // Обычный setClipboard() пропускает установку, если буфер уже
+        // содержит этот текст. Для набора это баг: второй «п» подряд
+        // не попадёт в буфер, но PASTE всё равно нужен. Поэтому здесь
+        // отдельный путь, который всегда перезаписывает буфер и помечает
+        // его sensitive (Android 13+), чтобы системный оверлей буфера
+        // не показывал набираемый текст.
+        //
+        // Буфер — чужой ресурс. Первую вставку в серии запоминаем, а
+        // возвращаем буфер только когда набор затих: иначе на каждый
+        // символ было бы по две записи в буфер.
+        synchronized (clipboardLock) {
+            if (!clipboardBackupValid) {
+                clipboardBackup = Device.getClipboardText();
+                clipboardBackupValid = true;
+            }
+
+            isSettingClipboard.set(true);
+            boolean ok = Device.setClipboardTextForPaste(text);
+            isSettingClipboard.set(false);
+            if (!ok) {
+                Ln.w("Could not set clipboard for text paste fallback");
+                return false;
+            }
+            if (Build.VERSION.SDK_INT < AndroidVersions.API_24_ANDROID_7_0 || !supportsInputEvents) {
+                return false;
+            }
+            // WAIT_FOR_FINISH, а не ASYNC: при быстром наборе следующий
+            // символ успевал перезаписать буфер раньше, чем приложение
+            // прочитает его для PASTE, и текст приходил перепутанным.
+            if (!pressReleaseKeycode(KeyEvent.KEYCODE_PASTE, Device.INJECT_MODE_WAIT_FOR_FINISH)) {
+                Ln.w("Could not inject PASTE for text paste fallback");
+                return false;
+            }
+            lastPastedText = text;
+            long burst = ++clipboardBurst;
+            EXECUTOR.schedule(() -> restoreClipboard(burst), 1200, TimeUnit.MILLISECONDS);
             return true;
         }
-        return false;
+    }
+
+    private void restoreClipboard(long burst) {
+        synchronized (clipboardLock) {
+            if (burst != clipboardBurst || !clipboardBackupValid) {
+                // Пользователь продолжает печатать — вернём буфер позже.
+                return;
+            }
+            clipboardBackupValid = false;
+            String backup = clipboardBackup;
+            clipboardBackup = null;
+            if (backup == null) {
+                // До нас в буфере текста не было — нечего возвращать.
+                return;
+            }
+            String current = Device.getClipboardText();
+            if (current == null || !current.equals(lastPastedText)) {
+                // В буфер писал кто-то ещё: не затираем чужую запись.
+                Ln.i("Clipboard changed during paste, not restoring");
+                return;
+            }
+            isSettingClipboard.set(true);
+            boolean ok = Device.setClipboardText(backup);
+            isSettingClipboard.set(false);
+            if (ok) {
+                Ln.i("Device clipboard restored");
+            }
+        }
     }
 
 

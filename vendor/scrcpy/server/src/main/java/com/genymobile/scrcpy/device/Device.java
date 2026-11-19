@@ -135,6 +135,19 @@ public final class Device {
         return clipboardManager.setText(text);
     }
 
+    /**
+     * Кладёт текст в буфер для внутренней вставки (фолбэк кириллицы).
+     * Не пропускает установку, если буфер уже содержит тот же текст:
+     * иначе повторный символ («пп») не вставится.
+     */
+    public static boolean setClipboardTextForPaste(String text) {
+        ClipboardManager clipboardManager = ServiceManager.getClipboardManager();
+        if (clipboardManager == null) {
+            return false;
+        }
+        return clipboardManager.setTextForPaste(text);
+    }
+
     public static boolean setDisplayPower(int displayId, boolean on) {
         assert displayId != Device.DISPLAY_ID_NONE;
 

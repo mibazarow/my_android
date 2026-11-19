@@ -305,18 +305,14 @@ sc_key_processor_process_text(struct sc_key_processor *kp,
         return;
     }
 
-    // Патч HARNES-S для my_android: кириллица с Mac.
-    //
-    // В MIXED-режиме буквы и пробел раньше уходили сырыми key events.
-    // Android подставлял символ по СВОЕЙ US-раскладке физической
-    // клавиатуры: латиница и пунктуация совпадали и проходили,
-    // кириллица не совпадала и терялась вместе с «Could not inject char».
-    //
-    // isalpha() смотрел только на первый байт, а в UTF-8 у кириллицы он
-    // >= 0x80 — решение принималось по случайному признаку. Теперь все
-    // текстовые события уходят как INJECT_TEXT: главной становится
-    // раскладка Mac. Спецклавиши (стрелки, Tab, Enter, F-клавиши) идут
-    // отдельным путём через process_key и не затрагиваются.
+    if (kb->key_inject_mode == SC_KEY_INJECT_MODE_MIXED) {
+        char c = event->text[0];
+        if (isalpha(c) || c == ' ') {
+            assert(event->text[1] == '\0');
+            // Letters and space are handled as raw key events
+            return;
+        }
+    }
 
     struct sc_control_msg msg;
 

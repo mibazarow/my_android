@@ -32,6 +32,12 @@ struct MirrorSettings: Codable, Equatable {
             "--video-codec", Self.videoCodec,
             "--stay-awake",
             "--stay-awake",
+            // Текст с клавиатуры Mac уходит в телефон текстовым событием,
+            // а не скан-кодом. Иначе Android подставляет символ по своей
+            // US-раскладке, и кириллица теряется. В режиме TEXT буквы,
+            // цифры и пунктуация приходят как есть, а спецклавиши
+            // (стрелки, Tab, Enter, Ctrl+…) по-прежнему идут key events.
+            "--prefer-text",
             // Ни --shortcut-mod, ни --legacy-paste здесь быть не должно.
             //
             // Проверено живьём: с этими двумя флагами сессия scrcpy на

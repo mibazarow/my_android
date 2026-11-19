@@ -91,6 +91,10 @@ mkdir -p "$OUT"
 cp "$BINARY" "$OUT/scrcpy"
 cp "$SERVER_APK" "$OUT/scrcpy-server"
 
+# Пересобранный бинарник теряет прошлую подпись, и macOS убивает его при
+# запуске («Killed: 9»). Подписываем ad-hoc сразу, иначе проверка ниже падает.
+codesign --force --sign - "$OUT/scrcpy"
+
 echo "→ проверяю, что бинарник запускается"
 "$OUT/scrcpy" --version | head -2
 
